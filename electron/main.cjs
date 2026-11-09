@@ -5,7 +5,17 @@ const url = require('url');
 const { execSync } = require('child_process');
 
 protocol.registerSchemesAsPrivileged([
-  { scheme: 'media', privileges: { standard: true, secure: true, stream: true, bypassCSP: true, supportFetchAPI: true } },
+  {
+    scheme: 'media',
+    privileges: {
+      standard: true,
+      secure: true,
+      stream: true,
+      bypassCSP: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+    },
+  },
 ]);
 
 const logPath = 'e:\\Game Automation\\oxide_stuff\\opencanvid\\electron_debug.log';
@@ -293,7 +303,23 @@ ipcMain.handle('write-export-frame-batch', async (_event, { tempDir, frames }) =
   }
 });
 
-ipcMain.handle('finalize-export-session', async (_event, { tempDir, totalFrames, fps, sourceVideoPath, defaultName }) => {
+function getFfmpegPath() {
+  const candidates = [
+    'C:\\Users\\Administrator\\AppData\\Local\\Microsoft\\WinGet\\Links\\ffmpeg.exe',
+    path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WinGet', 'Links', 'ffmpeg.exe'),
+    'ffmpeg',
+  ];
+  for (const c of candidates) {
+    try {
+      if (fs.existsSync(c)) {
+        return c;
+      }
+    } catch {}
+  }
+  return 'ffmpeg';
+}
+
+ipcMain.handle('finalize-export-session', async (_event, { tempDir, totalFrames, fps, sourceVideoPath, audioOffset, crf, defaultName }) => {
   try {
     const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
       title: 'Export Final Edited Video',
@@ -312,14 +338,18 @@ ipcMain.handle('finalize-export-session', async (_event, { tempDir, totalFrames,
 
     let audioArgs = '';
     if (sourceVideoPath && fs.existsSync(sourceVideoPath)) {
-      audioArgs = `-i "${sourceVideoPath}" -map 0:v:0 -map 1:a:0? -c:a aac -b:a 192k -shortest`;
+      const ssArg = (typeof audioOffset === 'number' && audioOffset > 0) ? `-ss ${audioOffset}` : '';
+      audioArgs = `${ssArg} -i "${sourceVideoPath}" -map 0:v:0 -map 1:a:0? -c:a aac -b:a 192k -shortest`;
     } else {
       audioArgs = '-map 0:v:0';
     }
 
-    const ffmpegCmd = `ffmpeg -y -framerate ${fps || 30} -i "${tempDir}/frame_%06d.jpg" ${audioArgs} -c:v libx264 -preset veryfast -crf 18 -pix_fmt yuv420p -movflags +faststart "${filePath}"`;
+    const ffmpegExe = getFfmpegPath();
+    const framePattern = path.join(tempDir, 'frame_%06d.jpg');
+    const safeCrf = typeof crf === 'number' ? crf : 18;
+    const ffmpegCmd = `"${ffmpegExe}" -y -framerate ${fps || 30} -i "${framePattern}" ${audioArgs} -c:v libx264 -preset veryfast -crf ${safeCrf} -pix_fmt yuv420p -movflags +faststart "${filePath}"`;
     log('Running FFmpeg command:', ffmpegCmd);
-    execSync(ffmpegCmd, { stdio: 'ignore', windowsHide: true });
+    execSync(ffmpegCmd, { stdio: 'pipe', windowsHide: true });
 
     try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
 
@@ -506,11 +536,25 @@ ipcMain.handle('set-recording-floating-mode', (_event, isRecording) => {
 app.whenReady().then(() => {
   protocol.handle('media', (request) => {
     try {
+      if (request.method === 'OPTIONS') {
+        return new Response(null, {
+          status: 204,
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+            'Access-Control-Allow-Headers': '*',
+          },
+        });
+      }
+
       const parsed = new URL(request.url);
       const filePath = parsed.searchParams.get('path');
       if (!filePath || !fs.existsSync(filePath)) {
         log('[MEDIA PROTOCOL] File not found:', filePath);
-        return new Response('File not found', { status: 404 });
+        return new Response('File not found', {
+          status: 404,
+          headers: { 'Access-Control-Allow-Origin': '*' },
+        });
       }
 
       const stats = fs.statSync(filePath);
@@ -521,6 +565,10 @@ app.whenReady().then(() => {
         'Content-Type': 'video/mp4',
         'Accept-Ranges': 'bytes',
         'Content-Length': stats.size.toString(),
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+        'Access-Control-Allow-Headers': '*',
+        'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
       };
 
       if (range) {
@@ -530,7 +578,8 @@ app.whenReady().then(() => {
         let end = parseInt(y, 10) || stats.size - 1;
         if (end >= stats.size) end = stats.size - 1;
         if (start >= stats.size) {
-          return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${stats.size}` } });
+          headers['Content-Range'] = `bytes */${stats.size}`;
+          return new Response(null, { status: 416, headers });
         }
         opts = { start, end };
         headers['Content-Range'] = `bytes ${start}-${end}/${stats.size}`;
@@ -542,7 +591,10 @@ app.whenReady().then(() => {
       return new Response(stream, { status, headers });
     } catch (e) {
       log('[MEDIA PROTOCOL ERROR]:', e.stack || e);
-      return new Response('Internal error', { status: 500 });
+      return new Response('Internal error', {
+        status: 500,
+        headers: { 'Access-Control-Allow-Origin': '*' },
+      });
     }
   });
 

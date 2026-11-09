@@ -59,18 +59,25 @@ export const TauriBridge = {
     return null;
   },
 
-  async readVideoFile(filePath: string): Promise<Uint8Array | null> {
-    if (isElectron() && (window as any).electronBridge?.readVideoFile) {
-      return await (window as any).electronBridge.readVideoFile(filePath);
-    }
-    return null;
-  },
-
   async saveProjectFile(defaultName: string, content: string): Promise<{ success: boolean; filePath?: string }> {
     if (isElectron() && (window as any).electronBridge?.saveProjectFile) {
       return await (window as any).electronBridge.saveProjectFile({ defaultName, content });
     }
     return { success: false };
+  },
+
+  async readVideoFile(filePath: string): Promise<Uint8Array | null> {
+    if (isElectron() && (window as any).electronBridge?.readVideoFile) {
+      try {
+        const res = await (window as any).electronBridge.readVideoFile(filePath);
+        if (res && (res instanceof Uint8Array || res.buffer)) {
+          return new Uint8Array(res);
+        }
+      } catch (e) {
+        console.warn('Failed readVideoFile:', e);
+      }
+    }
+    return null;
   },
 
   async prepareExportSession(): Promise<{ success: boolean; tempDir?: string }> {
@@ -92,6 +99,8 @@ export const TauriBridge = {
     totalFrames: number;
     fps: number;
     sourceVideoPath?: string;
+    audioOffset?: number;
+    crf?: number;
     defaultName?: string;
   }): Promise<{ success: boolean; filePath?: string; size?: number }> {
     if (isElectron() && (window as any).electronBridge?.finalizeExportSession) {

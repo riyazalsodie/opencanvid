@@ -317,7 +317,7 @@ export const StudioViewport: React.FC<StudioViewportProps> = React.memo(({
       <div className="flex-1 flex items-center justify-center p-4 overflow-hidden relative bg-[#070709]">
         <div
           ref={containerRef}
-          className={`w-full max-w-5xl ${aspectClass} rounded-2xl relative overflow-hidden flex items-center justify-center shadow-2xl bg-black border border-zinc-800/60`}
+          className={`w-full max-w-5xl ${aspectClass} rounded-2xl relative overflow-hidden flex items-center justify-center shadow-2xl bg-black border-0`}
         >
           {/* Hardware-Accelerated Isolated Background Blur Layer: Zero Tiling, Full Bleed Cover */}
           <div
@@ -359,6 +359,7 @@ export const StudioViewport: React.FC<StudioViewportProps> = React.memo(({
                 <video
                   ref={videoRef as any}
                   src={project.videoUrl}
+                  crossOrigin="anonymous"
                   className="w-full h-full object-contain select-none"
                   onLoadedMetadata={handleLoadedMetadata}
                   onEnded={onTogglePlay}
@@ -404,6 +405,7 @@ export const StudioViewport: React.FC<StudioViewportProps> = React.memo(({
                 <video
                   ref={camRef as any}
                   src={project.camUrl}
+                  crossOrigin="anonymous"
                   className="w-full h-full object-cover"
                   playsInline
                   muted

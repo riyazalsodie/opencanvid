@@ -61,6 +61,7 @@ export async function exportFinalEditedVideo(
   let tempDir = '';
   let video: HTMLVideoElement | null = null;
   let camVideo: HTMLVideoElement | null = null;
+  let objectUrlToRevoke: string | null = null;
 
   try {
     // 1. Prepare Export Session in Electron
@@ -119,6 +120,7 @@ export async function exportFinalEditedVideo(
     let bgImg: HTMLImageElement | null = null;
     if (project.background.type === 'image' && project.background.value) {
       bgImg = new Image();
+      bgImg.crossOrigin = 'anonymous';
       let val = project.background.value;
       if (val.startsWith('./')) {
         try {
@@ -144,35 +146,61 @@ export async function exportFinalEditedVideo(
     ]);
 
     // 6. Set up Dedicated Video Element for Frame Seeking
-    if (existingVideoElement && existingVideoElement.readyState >= 2) {
-      video = existingVideoElement;
-    } else {
-      video = document.createElement('video');
-      video.playsInline = true;
-      video.muted = true;
-      video.src = project.videoUrl!;
-      video.preload = 'auto';
+    // Create same-origin Blob URL from disk bytes to guarantee canvas is NEVER tainted
+    let videoSourceUrl = project.videoUrl || '';
 
-      await new Promise<void>((resolve, reject) => {
-        if (video!.readyState >= 2) return resolve();
-        video!.onloadeddata = () => resolve();
-        video!.oncanplay = () => resolve();
-        video!.onerror = () => {
-          if (existingVideoElement) {
-            video = existingVideoElement;
-            return resolve();
-          }
-          reject(new Error(`Failed loading source video: ${video?.error?.message || 'code ' + video?.error?.code}`));
-        };
-        setTimeout(resolve, 3500);
-      });
+    if (sourceVideoPath) {
+      try {
+        const fileBytes = await TauriBridge.readVideoFile(sourceVideoPath);
+        if (fileBytes && fileBytes.length > 0) {
+          const blob = new Blob([fileBytes.buffer as ArrayBuffer], { type: 'video/mp4' });
+          objectUrlToRevoke = URL.createObjectURL(blob);
+          videoSourceUrl = objectUrlToRevoke;
+        }
+      } catch (err) {
+        console.warn('Could not read file directly to blob URL:', err);
+      }
     }
+
+    video = document.createElement('video');
+    video.crossOrigin = 'anonymous';
+    video.playsInline = true;
+    video.muted = true;
+    video.src = videoSourceUrl;
+    video.preload = 'auto';
+
+    await new Promise<void>((resolve, reject) => {
+      let resolved = false;
+      const v = video!;
+      const onReady = () => {
+        if (!resolved && v.readyState >= 2) {
+          resolved = true;
+          resolve();
+        }
+      };
+      if (v.readyState >= 2) return resolve();
+      v.addEventListener('loadeddata', onReady);
+      v.addEventListener('canplay', onReady);
+      v.onerror = () => {
+        if (!resolved) {
+          resolved = true;
+          reject(new Error(`Failed loading source video: ${v?.error?.message || 'code ' + v?.error?.code}`));
+        }
+      };
+      setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          resolve();
+        }
+      }, 4000);
+    });
 
     if (project.webcam.enabled && (project.camUrl || existingCamElement)) {
       if (existingCamElement && existingCamElement.readyState >= 1) {
         camVideo = existingCamElement;
       } else if (project.camUrl) {
         camVideo = document.createElement('video');
+        camVideo.crossOrigin = 'anonymous';
         camVideo.playsInline = true;
         camVideo.muted = true;
         camVideo.src = project.camUrl;
@@ -346,14 +374,6 @@ export async function exportFinalEditedVideo(
       ctx.restore(); // restore zoom
       ctx.restore(); // restore clip
 
-      // C. 5. Sleek Translucent Window Border Accent
-      ctx.save();
-      drawRoundedRect(ctx, frameX, frameY, innerW, innerH, cornerRadius);
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
-      ctx.lineWidth = Math.max(1, 1.5 * (targetH / 1080));
-      ctx.stroke();
-      ctx.restore();
-
       // D. Draw Floating Webcam Overlay
       if (camVideo && project.webcam.enabled) {
         const camSizePx = (project.webcam.size / 100) * (innerW * 0.32);
@@ -475,6 +495,7 @@ export async function exportFinalEditedVideo(
       totalFrames,
       fps,
       sourceVideoPath,
+      audioOffset: clips[0]?.sourceStart || 0,
       defaultName: defaultFilename,
     });
 
@@ -497,5 +518,25 @@ export async function exportFinalEditedVideo(
       error: String(err),
     });
     return { success: false, error: err?.message || String(err) };
+  } finally {
+    if (objectUrlToRevoke) {
+      try {
+        URL.revokeObjectURL(objectUrlToRevoke);
+      } catch {}
+    }
+    if (video && video !== existingVideoElement) {
+      try {
+        video.pause();
+        video.src = '';
+        video.load();
+      } catch {}
+    }
+    if (camVideo && camVideo !== existingCamElement) {
+      try {
+        camVideo.pause();
+        camVideo.src = '';
+        camVideo.load();
+      } catch {}
+    }
   }
 }
