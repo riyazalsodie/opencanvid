@@ -172,6 +172,10 @@ export async function exportFinalEditedVideo(
     const totalDurationSec = clips.reduce((acc, c) => acc + Math.max(0.05, c.end - c.start), 0);
     if (totalDurationSec <= 0) throw new Error('Video duration is 0.');
 
+    // Paint initial dark frame on canvas before stream capture
+    ctx.fillStyle = '#0a0a0d';
+    ctx.fillRect(0, 0, targetW, targetH);
+
     // 6. Setup MediaStream & Audio
     const canvasStream = canvas.captureStream(60);
     let combinedStream = canvasStream;
@@ -183,22 +187,23 @@ export async function exportFinalEditedVideo(
         const dest = audioCtx.createMediaStreamDestination();
         const vSource = audioCtx.createMediaElementSource(video);
         vSource.connect(dest);
-        vSource.connect(audioCtx.destination);
-        combinedStream = new MediaStream([
-          ...canvasStream.getVideoTracks(),
-          ...dest.stream.getAudioTracks(),
-        ]);
+        const aTracks = dest.stream.getAudioTracks();
+        if (aTracks.length > 0) {
+          combinedStream = new MediaStream([
+            ...canvasStream.getVideoTracks(),
+            ...aTracks,
+          ]);
+        }
       }
     } catch {
       // Audio fallback to canvas-only stream if already piped
+      combinedStream = canvasStream;
     }
 
-    // 7. Pick Best Supported MimeType
+    // 7. Pick Best Supported MimeType (VP9/VP8 WebM is 100% reliable for canvas streams; Electron transcodes to MP4 via FFmpeg)
     let mimeType = 'video/webm;codecs=vp9,opus';
-    if (MediaRecorder.isTypeSupported('video/mp4;codecs=avc1')) {
-      mimeType = 'video/mp4;codecs=avc1';
-    } else if (MediaRecorder.isTypeSupported('video/mp4')) {
-      mimeType = 'video/mp4';
+    if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')) {
+      mimeType = 'video/webm;codecs=vp9,opus';
     } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')) {
       mimeType = 'video/webm;codecs=vp8,opus';
     } else if (MediaRecorder.isTypeSupported('video/webm')) {
@@ -216,8 +221,6 @@ export async function exportFinalEditedVideo(
         recordedChunks.push(e.data);
       }
     };
-
-    recorder.start(100);
 
     onProgress({
       progress: 10,
@@ -256,6 +259,7 @@ export async function exportFinalEditedVideo(
 
     // 9. Play through each clip sequentially
     let elapsedGlobalTime = 0;
+    let recorderStarted = false;
 
     for (let cIdx = 0; cIdx < clips.length; cIdx++) {
       const clip = clips[cIdx];
@@ -271,8 +275,14 @@ export async function exportFinalEditedVideo(
           resolve();
         };
         video.addEventListener('seeked', onSeeked);
-        setTimeout(resolve, 150); // safety fallback
+        setTimeout(resolve, 200); // safety fallback
       });
+
+      // Start recorder once video is actively positioned at real frame
+      if (!recorderStarted) {
+        recorder.start(100);
+        recorderStarted = true;
+      }
 
       await video.play().catch(() => {});
       if (camVideo) await camVideo.play().catch(() => {});

@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, desktopCapturer, session, protocol, net, di
 const path = require('path');
 const fs = require('fs');
 const url = require('url');
+const { execSync } = require('child_process');
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'media', privileges: { standard: true, secure: true, stream: true, bypassCSP: true, supportFetchAPI: true } },
@@ -275,9 +276,31 @@ ipcMain.handle('save-exported-video', async (_event, { defaultName, buffer }) =>
       ],
     });
     if (canceled || !filePath) return { success: false };
-    fs.writeFileSync(filePath, Buffer.from(buffer));
-    log('Exported video successfully written to:', filePath);
-    return { success: true, filePath };
+
+    const rawBuffer = Buffer.from(buffer);
+
+    // If target is MP4, convert webm buffer via ffmpeg into universal H.264 + AAC MP4
+    if (filePath.toLowerCase().endsWith('.mp4')) {
+      const tempWebm = path.join(app.getPath('temp'), `opencanvid_export_${Date.now()}.webm`);
+      try {
+        fs.writeFileSync(tempWebm, rawBuffer);
+        // Execute ffmpeg with fast libx264 + AAC + faststart
+        const ffmpegCmd = `ffmpeg -y -i "${tempWebm}" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart "${filePath}"`;
+        execSync(ffmpegCmd, { stdio: 'ignore', windowsHide: true });
+        try { if (fs.existsSync(tempWebm)) fs.unlinkSync(tempWebm); } catch {}
+        log('MP4 export successfully transcoded with ffmpeg to:', filePath);
+        return { success: true, filePath };
+      } catch (ffErr) {
+        log('FFmpeg transcode fallback, writing raw buffer directly:', ffErr);
+        try { if (fs.existsSync(tempWebm)) fs.unlinkSync(tempWebm); } catch {}
+        fs.writeFileSync(filePath, rawBuffer);
+        return { success: true, filePath };
+      }
+    } else {
+      fs.writeFileSync(filePath, rawBuffer);
+      log('Exported video successfully written to:', filePath);
+      return { success: true, filePath };
+    }
   } catch (e) {
     log('Error saving exported video file:', e);
     return { success: false, error: String(e) };
