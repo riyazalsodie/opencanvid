@@ -14,6 +14,7 @@ const bridge = {
   stopWgcRecording: () => ipcRenderer.invoke('stop-wgc-recording'),
   readVideoFile: (filePath) => ipcRenderer.invoke('read-video-file', filePath),
   saveProjectFile: (opts) => ipcRenderer.invoke('save-project-file', opts),
+  saveExportedVideo: (opts) => ipcRenderer.invoke('save-exported-video', opts),
   openProjectFile: () => ipcRenderer.invoke('open-project-file'),
   setRecordingFloatingMode: (flag) => ipcRenderer.invoke('set-recording-floating-mode', flag),
   onWindowState: (callback) => {

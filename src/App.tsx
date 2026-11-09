@@ -9,6 +9,8 @@ import { RegionSelectorOverlay } from './components/RegionSelectorOverlay';
 import { RecordingFloatingBar } from './components/RecordingFloatingBar';
 import type { ProjectState, ZoomKeyframe, MouseEventRecord, VideoClip } from './types/canvid';
 import { TauriBridge } from './utils/tauriBridge';
+import { ExportProgressModal } from './components/ExportProgressModal';
+import { exportFinalEditedVideo } from './utils/exportEngine';
 
 const INITIAL_PROJECT: ProjectState = {
   name: 'OpenCanvid Studio 11-5-2026',
@@ -849,34 +851,50 @@ export const App: React.FC = () => {
     e.target.value = '';
   };
 
-  // Export video via FFmpeg
+  // Export Progress State Modal
+  const [exportModal, setExportModal] = useState<{
+    isOpen: boolean;
+    progress: number;
+    status: 'preparing' | 'rendering' | 'saving' | 'done' | 'error';
+    message: string;
+    outputPath?: string;
+  }>({
+    isOpen: false,
+    progress: 0,
+    status: 'preparing',
+    message: '',
+  });
+
+  // Export Real Final Edited Video (Respects all trims, cuts, zooms, cursors, backgrounds & webcams)
   const handleExport = async () => {
-    if (!project.videoUrl) return;
+    if (!project.videoUrl) {
+      alert('Please record or import a video first before exporting.');
+      return;
+    }
     setIsExporting(true);
+    setExportModal({
+      isOpen: true,
+      progress: 0,
+      status: 'preparing',
+      message: 'Initializing video export pipeline...',
+    });
+
     try {
-      const paths = await TauriBridge.getSystemPaths();
-      const outputDir = paths.exported_dir || 'C:\\Users\\Administrator\\Videos\\Canvid\\Exported';
-      const outputPath = `${outputDir}\\${project.name}.mp4`;
+      const res = await exportFinalEditedVideo(project, (p) => {
+        setExportModal({
+          isOpen: true,
+          progress: p.progress,
+          status: p.status,
+          message: p.message,
+          outputPath: p.outputPath,
+        });
+      });
 
-      const options = {
-        video_path: project.videoUrl,
-        output_path: outputPath,
-        aspect_ratio: project.aspectRatio,
-        padding: project.padding,
-        radius: project.radius,
-        shadow: project.shadowEnabled,
-        bg_value: project.background.value,
-        cam_path: project.camUrl || undefined,
-        cam_position: project.webcam.position,
-        cam_shape: project.webcam.shape,
-        cam_size: project.webcam.size,
-        volume: project.volume,
-      };
-
-      const result = await TauriBridge.renderExport(options);
-      alert(`Export Successful!\nSaved to: ${result}`);
+      if (!res.success && res.error && res.error !== 'Save dialog was cancelled or write failed.') {
+        alert(`Export note: ${res.error}`);
+      }
     } catch (e: any) {
-      alert(`Export failed: ${e?.message || e}`);
+      alert(`Export error: ${e?.message || e}`);
     } finally {
       setIsExporting(false);
     }
@@ -1084,6 +1102,16 @@ export const App: React.FC = () => {
         isMaximized={isMaximized}
         onCancel={handleCancelRegionSelection}
         onConfirm={handleSelectRegionFromModal}
+      />
+
+      {/* 3. Real Video Export Progress Modal */}
+      <ExportProgressModal
+        isOpen={exportModal.isOpen}
+        progress={exportModal.progress}
+        status={exportModal.status}
+        message={exportModal.message}
+        outputPath={exportModal.outputPath}
+        onClose={() => setExportModal((prev) => ({ ...prev, isOpen: false }))}
       />
       </div>
     </div>

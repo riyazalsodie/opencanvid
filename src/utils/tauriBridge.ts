@@ -73,6 +73,25 @@ export const TauriBridge = {
     return { success: false };
   },
 
+  async saveExportedVideo(defaultName: string, buffer: ArrayBuffer): Promise<{ success: boolean; filePath?: string }> {
+    if (isElectron() && (window as any).electronBridge?.saveExportedVideo) {
+      return await (window as any).electronBridge.saveExportedVideo({ defaultName, buffer });
+    }
+    // Browser fallback download
+    try {
+      const blob = new Blob([buffer], { type: 'video/mp4' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = defaultName.endsWith('.mp4') ? defaultName : `${defaultName}.mp4`;
+      a.click();
+      URL.revokeObjectURL(url);
+      return { success: true, filePath: a.download };
+    } catch {
+      return { success: false };
+    }
+  },
+
   async openProjectFile(): Promise<{ filePath: string; fileName: string; content: string } | null> {
     if (isElectron() && (window as any).electronBridge?.openProjectFile) {
       return await (window as any).electronBridge.openProjectFile();

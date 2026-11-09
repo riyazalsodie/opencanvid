@@ -263,6 +263,27 @@ ipcMain.handle('save-project-file', async (_event, { defaultName, content }) => 
   }
 });
 
+ipcMain.handle('save-exported-video', async (_event, { defaultName, buffer }) => {
+  try {
+    const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+      title: 'Export Final Edited Video',
+      defaultPath: defaultName ? (defaultName.endsWith('.mp4') ? defaultName : `${defaultName}.mp4`) : 'OpenCanvid_Export.mp4',
+      filters: [
+        { name: 'MP4 Video (*.mp4)', extensions: ['mp4'] },
+        { name: 'WebM Video (*.webm)', extensions: ['webm'] },
+        { name: 'All Files (*.*)', extensions: ['*'] },
+      ],
+    });
+    if (canceled || !filePath) return { success: false };
+    fs.writeFileSync(filePath, Buffer.from(buffer));
+    log('Exported video successfully written to:', filePath);
+    return { success: true, filePath };
+  } catch (e) {
+    log('Error saving exported video file:', e);
+    return { success: false, error: String(e) };
+  }
+});
+
 ipcMain.handle('open-project-file', async () => {
   try {
     const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
