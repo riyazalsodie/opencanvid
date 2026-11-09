@@ -283,9 +283,10 @@ ipcMain.handle('save-exported-video', async (_event, { defaultName, buffer }) =>
     if (filePath.toLowerCase().endsWith('.mp4')) {
       const tempWebm = path.join(app.getPath('temp'), `opencanvid_export_${Date.now()}.webm`);
       try {
+        log('Exporting video. WebM buffer size:', rawBuffer.length);
         fs.writeFileSync(tempWebm, rawBuffer);
-        // Execute ffmpeg with fast libx264 + AAC + faststart
-        const ffmpegCmd = `ffmpeg -y -i "${tempWebm}" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart "${filePath}"`;
+        // Execute ffmpeg with fast libx264 + AAC + faststart + CFR 60fps
+        const ffmpegCmd = `ffmpeg -y -i "${tempWebm}" -c:v libx264 -preset veryfast -pix_fmt yuv420p -r 60 -c:a aac -b:a 192k -movflags +faststart "${filePath}"`;
         execSync(ffmpegCmd, { stdio: 'ignore', windowsHide: true });
         try { if (fs.existsSync(tempWebm)) fs.unlinkSync(tempWebm); } catch {}
         log('MP4 export successfully transcoded with ffmpeg to:', filePath);

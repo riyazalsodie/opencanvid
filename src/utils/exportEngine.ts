@@ -58,6 +58,9 @@ export async function exportFinalEditedVideo(
     message: 'Preparing studio canvas & assets...',
   });
 
+  let canvas: HTMLCanvasElement | null = null;
+  let createdVideoElement: HTMLVideoElement | null = null;
+
   try {
     // 1. Determine target resolution based on Aspect Ratio
     let targetW = 1920;
@@ -82,10 +85,19 @@ export async function exportFinalEditedVideo(
         break;
     }
 
-    // 2. Offscreen Rendering Canvas
-    const canvas = document.createElement('canvas');
+    // 2. Hardware Compositor Canvas (Attached to DOM to activate Chromium compositor frame pipeline)
+    canvas = document.createElement('canvas');
     canvas.width = targetW;
     canvas.height = targetH;
+    canvas.style.position = 'fixed';
+    canvas.style.left = '-99999px';
+    canvas.style.top = '-99999px';
+    canvas.style.width = '1px';
+    canvas.style.height = '1px';
+    canvas.style.opacity = '0';
+    canvas.style.pointerEvents = 'none';
+    canvas.style.zIndex = '-99999';
+    document.body.appendChild(canvas);
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) throw new Error('Could not create canvas 2D rendering context.');
 
@@ -123,7 +135,7 @@ export async function exportFinalEditedVideo(
       }) : Promise.resolve(),
     ]);
 
-    // 4. Set up Video Elements (Prefer already active element from viewport to bypass CORS/reloading)
+    // 4. Set up Dedicated Video Element Attached to DOM
     let video: HTMLVideoElement;
     if (existingVideoElement && existingVideoElement.readyState >= 1) {
       video = existingVideoElement;
@@ -133,6 +145,16 @@ export async function exportFinalEditedVideo(
       video.muted = false;
       video.volume = project.volume ?? 1;
       video.src = project.videoUrl!;
+      video.style.position = 'fixed';
+      video.style.left = '-99999px';
+      video.style.top = '-99999px';
+      video.style.width = '1px';
+      video.style.height = '1px';
+      video.style.opacity = '0';
+      video.style.pointerEvents = 'none';
+      video.style.zIndex = '-99999';
+      document.body.appendChild(video);
+      createdVideoElement = video;
 
       await new Promise<void>((resolve, reject) => {
         if (video.readyState >= 1) return resolve();
@@ -563,5 +585,12 @@ export async function exportFinalEditedVideo(
       error: String(err),
     });
     return { success: false, error: err?.message || String(err) };
+  } finally {
+    if (canvas && canvas.parentNode) canvas.parentNode.removeChild(canvas);
+    if (createdVideoElement && createdVideoElement.parentNode) {
+      createdVideoElement.pause();
+      createdVideoElement.src = '';
+      createdVideoElement.parentNode.removeChild(createdVideoElement);
+    }
   }
 }
