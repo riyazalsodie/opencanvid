@@ -42,6 +42,162 @@ function drawRoundedRect(
   }
 }
 
+// Draw Image with object-fit: cover (matching CSS backgroundSize: 'cover')
+function drawImageCover(
+  ctx: CanvasRenderingContext2D,
+  img: CanvasImageSource,
+  imgW: number,
+  imgH: number,
+  x: number,
+  y: number,
+  w: number,
+  h: number
+) {
+  if (imgW <= 0 || imgH <= 0 || w <= 0 || h <= 0) return;
+  const imgRatio = imgW / imgH;
+  const targetRatio = w / h;
+  let sWidth = imgW;
+  let sHeight = imgH;
+  let sx = 0;
+  let sy = 0;
+
+  if (imgRatio > targetRatio) {
+    sWidth = imgH * targetRatio;
+    sx = (imgW - sWidth) / 2;
+  } else {
+    sHeight = imgW / targetRatio;
+    sy = (imgH - sHeight) / 2;
+  }
+  ctx.drawImage(img, sx, sy, sWidth, sHeight, x, y, w, h);
+}
+
+// Draw Image / Video with object-fit: contain (matching StudioViewport <video className="object-contain" />)
+function drawImageContain(
+  ctx: CanvasRenderingContext2D,
+  img: CanvasImageSource,
+  imgW: number,
+  imgH: number,
+  x: number,
+  y: number,
+  w: number,
+  h: number
+) {
+  if (imgW <= 0 || imgH <= 0 || w <= 0 || h <= 0) return;
+  const imgRatio = imgW / imgH;
+  const targetRatio = w / h;
+  let dWidth = w;
+  let dHeight = h;
+  let dx = x;
+  let dy = y;
+
+  if (imgRatio > targetRatio) {
+    dHeight = w / imgRatio;
+    dy = y + (h - dHeight) / 2;
+  } else {
+    dWidth = h * imgRatio;
+    dx = x + (w - dWidth) / 2;
+  }
+  ctx.drawImage(img, 0, 0, imgW, imgH, dx, dy, dWidth, dHeight);
+}
+
+interface SmoothMousePoint {
+  x: number;
+  y: number;
+  isClicking: boolean;
+}
+
+// Smooth Catmull-Rom spline interpolation matching CustomCursor.tsx 1:1
+function getInterpolatedMouse(
+  events: MouseEventRecord[],
+  curMs: number,
+  smoothing = true
+): SmoothMousePoint | null {
+  if (!events || events.length === 0) return null;
+  let low = 0;
+  let high = events.length - 1;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    if (events[mid].t_ms < curMs) low = mid + 1;
+    else high = mid - 1;
+  }
+
+  const idx = Math.max(0, Math.min(events.length - 1, low));
+  const p0 = events[Math.max(0, idx - 2)];
+  const p1 = events[Math.max(0, idx - 1)];
+  const p2 = events[idx];
+  const p3 = events[Math.min(events.length - 1, idx + 1)];
+
+  let x = p2 ? p2.x : 0;
+  let y = p2 ? p2.y : 0;
+
+  if (smoothing && p1 && p2 && p2.t_ms > p1.t_ms) {
+    const t = Math.max(0, Math.min(1, (curMs - p1.t_ms) / (p2.t_ms - p1.t_ms)));
+    const t2 = t * t;
+    const t3 = t2 * t;
+
+    x = 0.5 * (
+      (2 * p1.x) +
+      (-p0.x + p2.x) * t +
+      (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
+      (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3
+    );
+
+    y = 0.5 * (
+      (2 * p1.y) +
+      (-p0.y + p2.y) * t +
+      (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
+      (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3
+    );
+  }
+
+  let isClick = false;
+  const startIdx = Math.max(0, idx - 8);
+  const endIdx = Math.min(events.length - 1, idx + 8);
+  for (let i = startIdx; i <= endIdx; i++) {
+    const ev = events[i];
+    if (ev && (ev.event_type === 'lclick' || ev.event_type === 'rclick') && Math.abs(ev.t_ms - curMs) < 220) {
+      isClick = true;
+      break;
+    }
+  }
+
+  return { x, y, isClicking: isClick };
+}
+
+// Compute Camera Pan & Zoom matching StudioViewport.tsx 1:1
+function computeCameraZoom(
+  curMs: number,
+  zooms: any[],
+  cursorFocal: { x: number; y: number }
+) {
+  const activeZoom = (zooms || []).find((z) => !z.disabled && curMs >= z.start && curMs <= z.end);
+  if (!activeZoom) {
+    return { level: 1.0, transX: 0, transY: 0 };
+  }
+
+  const zDur = Math.max(100, activeZoom.end - activeZoom.start);
+  const transDur = Math.min(420, zDur / 2.5);
+  let ease = 1.0;
+  if (curMs < activeZoom.start + transDur) {
+    const t = (curMs - activeZoom.start) / transDur;
+    ease = 0.5 - 0.5 * Math.cos(t * Math.PI); // smooth sine ease
+  } else if (curMs > activeZoom.end - transDur) {
+    const t = (activeZoom.end - curMs) / transDur;
+    ease = 0.5 - 0.5 * Math.cos(t * Math.PI);
+  }
+
+  const currentLevel = 1.0 + (activeZoom.level - 1.0) * ease;
+  const focalX = activeZoom.focal_x !== undefined ? activeZoom.focal_x : cursorFocal.x;
+  const focalY = activeZoom.focal_y !== undefined ? activeZoom.focal_y : cursorFocal.y;
+
+  // Exact Canvid focal clamping: prevents video from separating from window boundary
+  const maxOffset = 50 * (1 - 1 / currentLevel);
+  const transX = Math.max(-maxOffset, Math.min(maxOffset, (0.5 - focalX) * 100));
+  const transY = Math.max(-maxOffset, Math.min(maxOffset, (0.5 - focalY) * 100));
+
+  return { level: currentLevel, transX, transY };
+}
+
 export async function exportFinalEditedVideo(
   project: ProjectState,
   onProgress: (p: ExportProgress) => void,
@@ -62,8 +218,18 @@ export async function exportFinalEditedVideo(
   let video: HTMLVideoElement | null = null;
   let camVideo: HTMLVideoElement | null = null;
   let objectUrlToRevoke: string | null = null;
+  let hiddenContainer: HTMLDivElement | null = null;
 
   try {
+    // Read user quick export preferences if set
+    let savedSettings: any = {};
+    try {
+      const raw = localStorage.getItem('canvid_export_settings');
+      if (raw) savedSettings = JSON.parse(raw);
+    } catch {}
+
+    const fps = savedSettings.frameRate === 60 ? 60 : 30;
+
     // 1. Prepare Export Session in Electron
     const sessionRes = await TauriBridge.prepareExportSession();
     if (!sessionRes.success || !sessionRes.tempDir) {
@@ -83,23 +249,29 @@ export async function exportFinalEditedVideo(
     // 3. Determine target resolution based on Aspect Ratio
     let targetW = 1920;
     let targetH = 1080;
+    const resPreset = savedSettings.resolution || '1080p';
+    let baseDim = 1080;
+    if (resPreset === '4K') baseDim = 2160;
+    else if (resPreset === '1440p') baseDim = 1440;
+    else if (resPreset === '720p') baseDim = 720;
+
     switch (project.aspectRatio) {
       case '9:16':
-        targetW = 1080;
-        targetH = 1920;
+        targetW = baseDim;
+        targetH = Math.round((baseDim * 16) / 9);
         break;
       case '1:1':
-        targetW = 1080;
-        targetH = 1080;
+        targetW = baseDim;
+        targetH = baseDim;
         break;
       case '4:3':
-        targetW = 1440;
-        targetH = 1080;
+        targetW = Math.round((baseDim * 4) / 3);
+        targetH = baseDim;
         break;
       case '16:9':
       default:
-        targetW = 1920;
-        targetH = 1080;
+        targetW = Math.round((baseDim * 16) / 9);
+        targetH = baseDim;
         break;
     }
 
@@ -145,8 +317,7 @@ export async function exportFinalEditedVideo(
       }) : Promise.resolve(),
     ]);
 
-    // 6. Set up Dedicated Video Element for Frame Seeking
-    // Create same-origin Blob URL from disk bytes to guarantee canvas is NEVER tainted
+    // 6. Set up Dedicated Video Element for Deterministic Frame Seeking
     let videoSourceUrl = project.videoUrl || '';
 
     if (sourceVideoPath) {
@@ -166,8 +337,14 @@ export async function exportFinalEditedVideo(
     video.crossOrigin = 'anonymous';
     video.playsInline = true;
     video.muted = true;
-    video.src = videoSourceUrl;
     video.preload = 'auto';
+    video.src = videoSourceUrl;
+
+    // Attach to hidden DOM container for hardware acceleration & reliable frame callbacks
+    hiddenContainer = document.createElement('div');
+    hiddenContainer.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:2px;height:2px;opacity:0;pointer-events:none;overflow:hidden;';
+    hiddenContainer.appendChild(video);
+    document.body.appendChild(hiddenContainer);
 
     await new Promise<void>((resolve, reject) => {
       let resolved = false;
@@ -192,7 +369,7 @@ export async function exportFinalEditedVideo(
           resolved = true;
           resolve();
         }
-      }, 4000);
+      }, 4500);
     });
 
     if (project.webcam.enabled && (project.camUrl || existingCamElement)) {
@@ -204,6 +381,7 @@ export async function exportFinalEditedVideo(
         camVideo.playsInline = true;
         camVideo.muted = true;
         camVideo.src = project.camUrl;
+        hiddenContainer.appendChild(camVideo);
         await new Promise<void>((resolve) => {
           if (camVideo!.readyState >= 1) return resolve();
           camVideo!.onloadedmetadata = () => resolve();
@@ -222,44 +400,59 @@ export async function exportFinalEditedVideo(
     const totalDurationSec = clips.reduce((acc, c) => acc + Math.max(0.05, c.end - c.start), 0);
     if (totalDurationSec <= 0) throw new Error('Video duration is 0.');
 
-    const fps = 30; // 30 FPS broadcast standard
     const totalFrames = Math.max(1, Math.round(totalDurationSec * fps));
 
-    // 8. Geometry & Styling
+    // 8. Geometry & Scaling matching StudioViewport.tsx 1:1
     const videoOrigW = video.videoWidth || 1920;
     const videoOrigH = video.videoHeight || 1080;
-    const userPadding = project.padding !== undefined ? project.padding : 8;
-    const scaleFactor = Math.max(0.4, Math.min(0.94, 1 - (userPadding / 100) * 1.35));
-    const innerW = targetW * scaleFactor;
-    const innerH = targetH * scaleFactor;
+
+    const userPadding = typeof project.padding === 'number' ? project.padding : 8;
+    const paddingScale = Math.max(0.4, 1 - (userPadding / 100) * 1.4);
+    const innerW = targetW * paddingScale;
+    const innerH = targetH * paddingScale;
     const frameX = (targetW - innerW) / 2;
     const frameY = (targetH - innerH) / 2;
-    const baseRadius = project.radius !== undefined ? project.radius : 14;
-    const cornerRadius = Math.max(28, Math.round(baseRadius * (targetW / 650)));
 
-    // Mouse events helper
+    const userRadius = typeof project.radius === 'number' ? project.radius : 12;
+    const cornerRadius = Math.round(userRadius * (targetW / 960));
+
     const mouseEvents = project.mouseEvents || [];
-    const getMouseAtTime = (ms: number): MouseEventRecord | null => {
-      if (mouseEvents.length === 0) return null;
-      let low = 0;
-      let high = mouseEvents.length - 1;
-      while (low <= high) {
-        const mid = Math.floor((low + high) / 2);
-        if (mouseEvents[mid].t_ms < ms) low = mid + 1;
-        else high = mid - 1;
-      }
-      const idx = Math.max(0, Math.min(mouseEvents.length - 1, low));
-      return mouseEvents[idx];
-    };
 
     onProgress({
       progress: 10,
       status: 'rendering',
-      message: `Rendering ${totalFrames} frames with Canvid curvature & screen blur...`,
+      message: `Rendering ${totalFrames} frames at ${fps} FPS...`,
     });
 
     // 9. Frame-by-Frame Deterministic Rendering Loop
     let frameBatch: { index: number; dataUrl: string }[] = [];
+
+    // Seeking synchronizer using Chromium's requestVideoFrameCallback
+    const seekVideoFrame = (vid: HTMLVideoElement, targetTime: number): Promise<void> => {
+      return new Promise<void>((resolve) => {
+        if (Math.abs(vid.currentTime - targetTime) < 0.006) {
+          return resolve();
+        }
+        let resolved = false;
+        const finish = () => {
+          if (!resolved) {
+            resolved = true;
+            vid.removeEventListener('seeked', onSeeked);
+            resolve();
+          }
+        };
+        const onSeeked = () => {
+          if ('requestVideoFrameCallback' in vid) {
+            (vid as any).requestVideoFrameCallback(() => finish());
+          } else {
+            requestAnimationFrame(() => finish());
+          }
+        };
+        vid.addEventListener('seeked', onSeeked, { once: true });
+        vid.currentTime = targetTime;
+        setTimeout(finish, 200);
+      });
+    };
 
     for (let frameIdx = 0; frameIdx < totalFrames; frameIdx++) {
       const currentTimelineSec = frameIdx / fps;
@@ -286,93 +479,144 @@ export async function exportFinalEditedVideo(
 
       const videoTargetTime = activeClip.sourceStart + clipOffsetSec;
 
-      // Seek video to frame timestamp
-      if (Math.abs(video.currentTime - videoTargetTime) > 0.025) {
-        video.currentTime = videoTargetTime;
-        await new Promise<void>((r) => {
-          const onSeek = () => {
-            video!.removeEventListener('seeked', onSeek);
-            r();
-          };
-          video!.addEventListener('seeked', onSeek);
-          setTimeout(r, 80); // Safety fallback
-        });
-      }
+      // Deterministic Seek to frame timestamp
+      await seekVideoFrame(video, videoTargetTime);
 
-      const vw = video.videoWidth > 0 ? video.videoWidth : videoOrigW;
-      const vh = video.videoHeight > 0 ? video.videoHeight : videoOrigH;
+      const curMs = currentTimelineSec * 1000;
+      const mouse = getInterpolatedMouse(mouseEvents, curMs, project.cursor.smoothing !== false);
+      const cursorFocal = mouse ? { x: mouse.x / videoOrigW, y: mouse.y / videoOrigH } : { x: 0.5, y: 0.5 };
 
-      // A. Draw Background: Wallpaper (with blur) OR Authentic Canvid Ambient Screen Blur
+      // Clear canvas
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, 0, targetW, targetH);
+
+      // A. Draw Background Layer (Matching StudioViewport.tsx 1:1)
       ctx.save();
       if (bgImg && bgImg.complete && bgImg.naturalWidth > 0) {
         if (project.backgroundBlur && project.backgroundBlur > 0) {
-          ctx.filter = `blur(${Math.max(12, project.backgroundBlur * 1.6)}px)`;
+          ctx.filter = `blur(${Math.max(8, project.backgroundBlur * 1.5)}px)`;
+        } else {
+          ctx.filter = 'none';
         }
-        ctx.drawImage(bgImg, -20, -20, targetW + 40, targetH + 40);
+        // Scale 1.06 to avoid edge blur bleed matching CSS transform: 'scale(1.06)'
+        ctx.save();
+        ctx.translate(targetW / 2, targetH / 2);
+        ctx.scale(1.06, 1.06);
+        ctx.translate(-targetW / 2, -targetH / 2);
+        drawImageCover(ctx, bgImg, bgImg.naturalWidth, bgImg.naturalHeight, 0, 0, targetW, targetH);
+        ctx.restore();
+      } else if (project.background.type === 'gradient' && project.background.value) {
+        ctx.filter = 'none';
+        const gradColors = project.background.value.match(/(#[0-9a-fA-F]{3,8}|rgba?\([^)]+\))/g);
+        if (gradColors && gradColors.length >= 2) {
+          const g = ctx.createLinearGradient(0, 0, targetW, targetH);
+          g.addColorStop(0, gradColors[0]);
+          g.addColorStop(1, gradColors[gradColors.length - 1]);
+          ctx.fillStyle = g;
+        } else {
+          ctx.fillStyle = '#18181b';
+        }
+        ctx.fillRect(0, 0, targetW, targetH);
       } else if (project.background.type === 'color' && project.background.value && project.background.value.toLowerCase() !== '#000000') {
+        ctx.filter = 'none';
         ctx.fillStyle = project.background.value;
         ctx.fillRect(0, 0, targetW, targetH);
       } else {
         // Canvid Signature Ambient Screen Blur
         ctx.filter = 'blur(48px) brightness(0.65) saturate(1.25)';
-        ctx.drawImage(video, 0, 0, vw, vh, -40, -40, targetW + 80, targetH + 80);
+        ctx.drawImage(video, 0, 0, videoOrigW, videoOrigH, -40, -40, targetW + 80, targetH + 80);
       }
       ctx.restore();
 
-      // B. Compute Auto-Zoom Transform
-      const curMs = currentTimelineSec * 1000;
-      const activeZoom = (project.zooms || []).find((z) => curMs >= z.start && curMs <= z.end);
-
-      let zoomScale = 1.0;
-      let focalX = targetW / 2;
-      let focalY = targetH / 2;
-
-      if (activeZoom) {
-        const zDur = Math.max(100, activeZoom.end - activeZoom.start);
-        const zProgress = (curMs - activeZoom.start) / zDur;
-        let ease = 1.0;
-        if (zProgress < 0.25) {
-          ease = zProgress / 0.25;
-        } else if (zProgress > 0.75) {
-          ease = 1 - (zProgress - 0.75) / 0.25;
-        }
-        zoomScale = 1 + (activeZoom.level - 1) * ease;
-
-        if (activeZoom.focal_x !== undefined && activeZoom.focal_y !== undefined) {
-          focalX = frameX + (activeZoom.focal_x * innerW);
-          focalY = frameY + (activeZoom.focal_y * innerH);
-        }
-      }
-
-      // C. 1. Outer Soft Drop Shadow
+      // B. Outer Soft Drop Shadow (Matching StudioViewport.tsx)
       if (project.shadowEnabled) {
         ctx.save();
+        const shadowBlur = (typeof project.shadowBlur === 'number' ? project.shadowBlur : 35) * (targetW / 960);
         ctx.shadowColor = 'rgba(0, 0, 0, 0.65)';
-        ctx.shadowBlur = Math.max(28, (project.shadowBlur ?? 35) * (targetH / 650));
-        ctx.shadowOffsetY = 14 * (targetH / 650);
+        ctx.shadowBlur = shadowBlur;
+        ctx.shadowOffsetY = shadowBlur / 2;
         ctx.fillStyle = '#000000';
         drawRoundedRect(ctx, frameX, frameY, innerW, innerH, cornerRadius);
         ctx.fill();
         ctx.restore();
       }
 
-      // C. 2. Rounded Window Clip
+      // C. Video Container: Rounded Clip + Dynamic Camera Zoom
       ctx.save();
       drawRoundedRect(ctx, frameX, frameY, innerW, innerH, cornerRadius);
       ctx.clip();
 
-      // C. 3. Apply Camera Zoom Transform
+      // Compute Camera Zoom & Pan
+      const zoom = computeCameraZoom(curMs, project.zooms || [], cursorFocal);
+
       ctx.save();
-      if (zoomScale > 1.001) {
-        ctx.translate(focalX, focalY);
-        ctx.scale(zoomScale, zoomScale);
-        ctx.translate(-focalX, -focalY);
+      // Match StudioViewport: transformOrigin: 50% 50%, transform: scale(level) translate(transX%, transY%)
+      const originX = frameX + innerW / 2;
+      const originY = frameY + innerH / 2;
+      ctx.translate(originX, originY);
+      ctx.scale(zoom.level, zoom.level);
+      ctx.translate((zoom.transX / 100) * innerW, (zoom.transY / 100) * innerH);
+      ctx.translate(-innerW / 2, -innerH / 2);
+
+      // C. 1. Draw Video Frame with object-fit: contain
+      drawImageContain(ctx, video, videoOrigW, videoOrigH, 0, 0, innerW, innerH);
+
+      // C. 2. Draw Vector Cursor inside the Same Camera Space (Exact alignment)
+      if (project.cursor.visible && mouse) {
+        const mouseCanvasX = (mouse.x / videoOrigW) * innerW;
+        const mouseCanvasY = (mouse.y / videoOrigH) * innerH;
+
+        const curTheme = project.cursor.theme || 'windows';
+        const isClicking = mouse.isClicking;
+        const cursorImg = curTheme === 'mac'
+          ? (isClicking ? macHand : macArrow)
+          : (isClicking ? winLink : winArrow);
+
+        // Counteract zoom so cursor maintains natural visual size on screen just like in CSS
+        const baseCursorScale = (project.cursor.scale ?? 1.4) * (targetW / 1920);
+        const cursorScale = baseCursorScale / zoom.level;
+        const cursorW = 28 * cursorScale;
+        const cursorH = 28 * cursorScale;
+
+        let hotspotOffsetX = 0;
+        let hotspotOffsetY = 0;
+
+        if (isClicking) {
+          if (curTheme === 'windows') {
+            hotspotOffsetX = -0.3571 * cursorW;
+          } else {
+            hotspotOffsetX = -0.3396 * cursorW;
+            hotspotOffsetY = -0.1161 * cursorH;
+          }
+        } else {
+          if (curTheme === 'mac') {
+            hotspotOffsetX = -0.1711 * cursorW;
+            hotspotOffsetY = -0.0973 * cursorH;
+          }
+        }
+
+        // Click ripple
+        if (project.cursor.clickEffect === 'ripple' && isClicking) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(mouseCanvasX, mouseCanvasY, 24 * cursorScale, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(59, 130, 246, 0.75)';
+          ctx.lineWidth = 2.5 * (targetW / 1920) / zoom.level;
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        ctx.drawImage(
+          cursorImg,
+          mouseCanvasX + hotspotOffsetX,
+          mouseCanvasY + hotspotOffsetY,
+          cursorW,
+          cursorH
+        );
       }
 
-      // C. 4. Render Sharp Video Frame
-      ctx.drawImage(video, 0, 0, vw, vh, frameX, frameY, innerW, innerH);
-      ctx.restore(); // restore zoom
-      ctx.restore(); // restore clip
+      ctx.restore(); // Restore camera zoom
+      ctx.restore(); // Restore rounded window clip
 
       // D. Draw Floating Webcam Overlay
       if (camVideo && project.webcam.enabled) {
@@ -395,7 +639,7 @@ export async function exportFinalEditedVideo(
         if (project.webcam.shape === 'circle') {
           ctx.arc(camX + camSizePx / 2, camY + camSizePx / 2, camSizePx / 2, 0, Math.PI * 2);
         } else {
-          drawRoundedRect(ctx, camX, camY, camSizePx, camSizePx, 16);
+          drawRoundedRect(ctx, camX, camY, camSizePx, camSizePx, 20 * (targetW / 1920));
         }
         ctx.closePath();
         ctx.clip();
@@ -403,68 +647,28 @@ export async function exportFinalEditedVideo(
         if (project.webcam.mirrored) {
           ctx.translate(camX + camSizePx, camY);
           ctx.scale(-1, 1);
-          ctx.drawImage(camVideo, 0, 0, camSizePx, camSizePx);
+          drawImageCover(ctx, camVideo, camVideo.videoWidth || 640, camVideo.videoHeight || 480, 0, 0, camSizePx, camSizePx);
         } else {
-          ctx.drawImage(camVideo, camX, camY, camSizePx, camSizePx);
+          drawImageCover(ctx, camVideo, camVideo.videoWidth || 640, camVideo.videoHeight || 480, camX, camY, camSizePx, camSizePx);
         }
         ctx.restore();
 
-        // Webcam subtle border
+        // Subtle border
         ctx.save();
         ctx.beginPath();
         if (project.webcam.shape === 'circle') {
           ctx.arc(camX + camSizePx / 2, camY + camSizePx / 2, camSizePx / 2, 0, Math.PI * 2);
         } else {
-          drawRoundedRect(ctx, camX, camY, camSizePx, camSizePx, 16);
+          drawRoundedRect(ctx, camX, camY, camSizePx, camSizePx, 20 * (targetW / 1920));
         }
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
-        ctx.lineWidth = 2;
+        ctx.lineWidth = 2 * (targetW / 1920);
         ctx.stroke();
         ctx.restore();
       }
 
-      // E. Draw Cursor
-      if (project.cursor.visible) {
-        ctx.save();
-        if (zoomScale > 1.001) {
-          ctx.translate(focalX, focalY);
-          ctx.scale(zoomScale, zoomScale);
-          ctx.translate(-focalX, -focalY);
-        }
-
-        const m = getMouseAtTime(curMs);
-        if (m) {
-          const curTheme = project.cursor.theme || 'mac';
-          const isClicking = m.event_type === 'lclick';
-          const cursorImg = curTheme === 'mac'
-            ? (isClicking ? macHand : macArrow)
-            : (isClicking ? winLink : winArrow);
-
-          const mouseCanvasX = frameX + (m.x / videoOrigW) * innerW;
-          const mouseCanvasY = frameY + (m.y / videoOrigH) * innerH;
-          const cursorScale = (project.cursor.scale ?? 1.4) * (targetW / 1920);
-          const cursorW = 28 * cursorScale;
-          const cursorH = 28 * cursorScale;
-
-          // Click ripple effect
-          if (project.cursor.clickEffect === 'ripple' && isClicking) {
-            ctx.save();
-            ctx.beginPath();
-            ctx.arc(mouseCanvasX, mouseCanvasY, 26 * cursorScale, 0, Math.PI * 2);
-            ctx.strokeStyle = 'rgba(59, 130, 246, 0.7)';
-            ctx.lineWidth = 3;
-            ctx.stroke();
-            ctx.restore();
-          }
-
-          ctx.drawImage(cursorImg, mouseCanvasX, mouseCanvasY, cursorW, cursorH);
-        }
-
-        ctx.restore();
-      }
-
       // Serialize frame
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.90);
       frameBatch.push({ index: frameIdx, dataUrl });
 
       // Write batch to disk every 15 frames or on final frame
@@ -490,12 +694,18 @@ export async function exportFinalEditedVideo(
     });
 
     const defaultFilename = `${project.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_Edited.mp4`;
+    let crfVal = 18;
+    if (savedSettings.quality === 'Ultra') crfVal = 14;
+    else if (savedSettings.quality === 'Standard') crfVal = 23;
+    else if (savedSettings.quality === 'Low') crfVal = 28;
+
     const res = await TauriBridge.finalizeExportSession({
       tempDir,
       totalFrames,
       fps,
       sourceVideoPath,
       audioOffset: clips[0]?.sourceStart || 0,
+      crf: crfVal,
       defaultName: defaultFilename,
     });
 
@@ -519,6 +729,11 @@ export async function exportFinalEditedVideo(
     });
     return { success: false, error: err?.message || String(err) };
   } finally {
+    if (hiddenContainer && hiddenContainer.parentNode) {
+      try {
+        hiddenContainer.parentNode.removeChild(hiddenContainer);
+      } catch {}
+    }
     if (objectUrlToRevoke) {
       try {
         URL.revokeObjectURL(objectUrlToRevoke);
