@@ -209,7 +209,7 @@ export const Timeline: React.FC<TimelineProps> = React.memo(({
   }, [project.clips, safeDuration]);
 
   return (
-    <div className="h-32 rounded-2xl border border-zinc-800/80 bg-[#0c0c0e] flex flex-col select-none font-sans z-20 shadow-xl overflow-hidden shrink-0">
+    <div className="h-32 rounded-2xl border border-zinc-800/40 bg-[#0c0c0e] flex flex-col select-none font-sans z-20 shadow-xl overflow-hidden shrink-0">
       {/* Scrollable Tracks & Ruler Area with Zoom Scaling */}
       <div
         ref={scrollContainerRef}
@@ -226,17 +226,6 @@ export const Timeline: React.FC<TimelineProps> = React.memo(({
           }}
           className="h-full relative cursor-pointer px-4 pt-1.5 pb-2 flex flex-col justify-between"
         >
-          {/* Subtle Vertical Hairline Grid Lines (Matching Image 1 & Image 2) */}
-          <div className="absolute inset-0 pointer-events-none px-4">
-            {rulerTicks.map((t) => (
-              <div
-                key={t.sec}
-                className="absolute top-0 bottom-0 w-[1px] bg-zinc-800/35 pointer-events-none"
-                style={{ left: `calc(1rem + (100% - 2rem) * (${t.leftPct} / 100))` }}
-              />
-            ))}
-          </div>
-
           {/* Seconds Ruler Header */}
           <div className="h-5 relative w-full pointer-events-none text-[10px] text-zinc-500 font-mono">
             {/* Minor hairline ticks */}

@@ -4,7 +4,6 @@ import {
   ChevronDown,
   Undo2,
   Redo2,
-  Share2,
   MoreVertical,
   ArrowUpCircle,
   Play,
@@ -19,6 +18,7 @@ import {
 } from 'lucide-react';
 import type { ProjectState } from '../types/canvid';
 import { CustomCursor } from './CustomCursor';
+import { QuickShareSettingsModal } from './QuickShareSettingsModal';
 
 interface StudioViewportProps {
   project: ProjectState;
@@ -47,7 +47,7 @@ export const StudioViewport: React.FC<StudioViewportProps> = React.memo(({
   camRef,
   onExport,
   isExporting,
-  onSaveProject,
+  onSaveProject: _onSaveProject,
   onTogglePlay,
   onSeek,
   onAddZoom,
@@ -62,6 +62,7 @@ export const StudioViewport: React.FC<StudioViewportProps> = React.memo(({
   const [videoDims, setVideoDims] = useState<{ width: number; height: number }>({ width: 1920, height: 1080 });
   const [playbackTime, setPlaybackTime] = useState<number>(0);
   const [showAspectMenu, setShowAspectMenu] = useState(false);
+  const [isQuickShareOpen, setIsQuickShareOpen] = useState(false);
   const aspectMenuRef = useRef<HTMLDivElement>(null);
 
   // Close aspect ratio popup when clicking outside
@@ -249,9 +250,9 @@ export const StudioViewport: React.FC<StudioViewportProps> = React.memo(({
   const activeCursorTime = effectiveTime * 1000;
 
   return (
-    <div className="flex-1 rounded-2xl border border-zinc-800/80 bg-[#0c0c0e] flex flex-col overflow-hidden relative select-none shadow-xl min-w-0">
+    <div className="flex-1 rounded-2xl border border-zinc-800/40 bg-[#0c0c0e] flex flex-col overflow-hidden relative select-none shadow-xl min-w-0">
       {/* 1. Top Studio Sub-Bar (Matching Screenshot 1 & 2) */}
-      <div className="h-10 px-4 flex items-center justify-between text-xs text-zinc-300 border-b border-zinc-800/80 bg-[#0e0e11] shrink-0">
+      <div className="h-10 px-4 flex items-center justify-between text-xs text-zinc-300 border-b border-zinc-800/40 bg-[#0e0e11] shrink-0">
         {/* Left: Presets ⌄ */}
         <div className="flex items-center gap-1.5 text-zinc-400 hover:text-zinc-200 cursor-pointer px-2 py-1 rounded-md hover:bg-zinc-900/80 transition-colors">
           <Wand2 className="w-3.5 h-3.5 text-zinc-400" />
@@ -259,8 +260,8 @@ export const StudioViewport: React.FC<StudioViewportProps> = React.memo(({
           <ChevronDown className="w-3 h-3 text-zinc-500" />
         </div>
 
-        {/* Right: Undo, Redo, Quick Share ⋮, Export */}
-        <div className="flex items-center gap-2">
+        {/* Right: Undo, Redo, Export with 3-Dots Quick Share Menu */}
+        <div className="flex items-center gap-1.5 relative">
           {/* Undo */}
           <button
             className="p-1.5 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-900/80 rounded-md transition-colors"
@@ -277,30 +278,33 @@ export const StudioViewport: React.FC<StudioViewportProps> = React.memo(({
             <Redo2 className="w-3.5 h-3.5" />
           </button>
 
-          {/* Quick Share with 3 dots */}
-          <div className="flex items-center bg-[#141416] border border-zinc-800/90 rounded-lg overflow-hidden shadow-sm">
+          {/* Primary Export Button with 3 dots on right side */}
+          <div className="flex items-center rounded-lg bg-blue-600 shadow-sm ml-1 overflow-hidden">
             <button
-              onClick={onSaveProject}
-              className="flex items-center gap-1.5 px-3 py-1 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-colors text-xs font-medium"
+              onClick={onExport}
+              disabled={isExporting}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 hover:bg-blue-500 text-white font-medium transition-all text-xs disabled:opacity-50"
             >
-              <Share2 className="w-3 h-3 text-zinc-400" />
-              <span>Quick Share</span>
+              <ArrowUpCircle className="w-3.5 h-3.5" />
+              <span>{isExporting ? 'Exporting...' : 'Export'}</span>
             </button>
-            <div className="w-[1px] h-4 bg-zinc-800" />
-            <button className="px-1.5 py-1 hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors">
-              <MoreVertical className="w-3 h-3" />
+
+            <div className="w-[1px] h-4 bg-blue-400/40" />
+
+            <button
+              onClick={() => setIsQuickShareOpen(!isQuickShareOpen)}
+              className="px-2 py-1.5 hover:bg-blue-500 text-white transition-colors"
+              title="Quick Share Settings"
+            >
+              <MoreVertical className="w-3.5 h-3.5" />
             </button>
           </div>
 
-          {/* Primary Export Button */}
-          <button
-            onClick={onExport}
-            disabled={isExporting}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium shadow-sm transition-all text-xs disabled:opacity-50"
-          >
-            <ArrowUpCircle className="w-3.5 h-3.5" />
-            <span>{isExporting ? 'Exporting...' : 'Export'}</span>
-          </button>
+          {/* Quick Share Settings Dropdown Modal */}
+          <QuickShareSettingsModal
+            isOpen={isQuickShareOpen}
+            onClose={() => setIsQuickShareOpen(false)}
+          />
         </div>
       </div>
 

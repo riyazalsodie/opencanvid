@@ -193,9 +193,9 @@ export const Inspector: React.FC<InspectorProps> = React.memo(({
   };
 
   return (
-    <div className="flex h-full rounded-2xl border border-zinc-800/80 bg-[#0c0c0e] text-zinc-200 select-none font-sans z-20 overflow-hidden shadow-xl shrink-0">
+    <div className="flex h-full rounded-2xl border border-zinc-800/40 bg-[#0c0c0e] text-zinc-200 select-none font-sans z-20 overflow-hidden shadow-xl shrink-0">
       {/* 1. Left Vertical Icon Strip: EXACT 8 ICONS IN ORDER + BOTTOM COLLAPSE */}
-      <div className="w-13 border-r border-zinc-800/80 bg-[#09090c] flex flex-col items-center justify-between py-3">
+      <div className="w-13 border-r border-zinc-800/40 bg-[#09090c] flex flex-col items-center justify-between py-3">
         {/* Top 8 Icons */}
         <div className="flex flex-col items-center gap-3">
           {/* Icon 1: Wallpaper & Background */}

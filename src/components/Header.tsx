@@ -1,5 +1,5 @@
 import React from 'react';
-import { Download, FolderOpen, Share2, Disc } from 'lucide-react';
+import { Download, FolderOpen, Disc } from 'lucide-react';
 
 interface HeaderProps {
   aspectRatio: '16:9' | '9:16' | '4:3' | '1:1';
@@ -7,7 +7,7 @@ interface HeaderProps {
   onOpenRecordModal: () => void;
   onExport: () => void;
   onImportFile: () => void;
-  onSaveArchive: () => void;
+  onSaveArchive?: () => void;
   ffmpegReady?: boolean;
   isExporting: boolean;
   projectName?: string;
@@ -19,7 +19,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenRecordModal,
   onExport,
   onImportFile,
-  onSaveArchive,
+  onSaveArchive: _onSaveArchive,
   isExporting,
   projectName = 'OpenCanvid Studio',
 }) => {
@@ -74,15 +74,6 @@ export const Header: React.FC<HeaderProps> = ({
         >
           <FolderOpen className="w-3.5 h-3.5" />
           <span>Open</span>
-        </button>
-
-        {/* Quick Share (Canvid Screenshot 3) */}
-        <button
-          onClick={onSaveArchive}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-zinc-800 transition-colors"
-        >
-          <Share2 className="w-3.5 h-3.5" />
-          <span>Quick Share</span>
         </button>
 
         {/* Blue Export Button (Canvid Screenshot 3) */}
