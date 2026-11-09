@@ -15,6 +15,29 @@ export interface ExportProgress {
   error?: string;
 }
 
+// 100% Cross-Browser Anti-Aliased Rounded Rect Path
+function drawRoundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number
+) {
+  const radius = Math.max(0, Math.min(r, w / 2, h / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + w - radius, y);
+  ctx.arcTo(x + w, y, x + w, y + radius, radius);
+  ctx.lineTo(x + w, y + h - radius);
+  ctx.arcTo(x + w, y + h, x + w - radius, y + h, radius);
+  ctx.lineTo(x + radius, y + h);
+  ctx.arcTo(x, y + h, x, y + h - radius, radius);
+  ctx.lineTo(x, y + radius);
+  ctx.arcTo(x, y, x + radius, y, radius);
+  ctx.closePath();
+}
+
 export async function exportFinalEditedVideo(
   project: ProjectState,
   onProgress: (p: ExportProgress) => void,
@@ -185,13 +208,15 @@ export async function exportFinalEditedVideo(
       message: 'Rendering real edited frames with smooth zooms & cursor...',
     });
 
-    // 8. Video Dimensions and Insets
+    // 8. Video Dimensions and Insets (Exact Match with Studio Viewport Scaling)
     const videoOrigW = video.videoWidth || 1920;
     const videoOrigH = video.videoHeight || 1080;
-    const paddingPx = ((project.padding ?? 24) / 100) * (Math.min(targetW, targetH) * 0.25);
-    const innerW = targetW - paddingPx * 2;
-    const innerH = targetH - paddingPx * 2;
-    const cornerRadius = project.radius ?? 18;
+    const scaleFactor = Math.max(0.4, 1 - ((project.padding ?? 8) / 100) * 1.4);
+    const innerW = targetW * scaleFactor;
+    const innerH = targetH * scaleFactor;
+    const frameX = (targetW - innerW) / 2;
+    const frameY = (targetH - innerH) / 2;
+    const cornerRadius = Math.max(12, (project.radius ?? 14) * (targetH / 650));
 
     // Mouse events helper
     const mouseEvents = project.mouseEvents || [];
@@ -278,14 +303,31 @@ export async function exportFinalEditedVideo(
             }
             zoomScale = 1 + (activeZoom.level - 1) * ease;
 
-            // Focal coordinates
+            // Focal coordinates relative to the video frame
             if (activeZoom.focal_x !== undefined && activeZoom.focal_y !== undefined) {
-              focalX = paddingPx + (activeZoom.focal_x * innerW);
-              focalY = paddingPx + (activeZoom.focal_y * innerH);
+              focalX = frameX + (activeZoom.focal_x * innerW);
+              focalY = frameY + (activeZoom.focal_y * innerH);
             }
           }
 
-          // Apply Zoom transform
+          // C. 1. Draw Outer Drop Shadow Behind the Rounded Frame
+          if (project.shadowEnabled) {
+            ctx.save();
+            ctx.shadowColor = 'rgba(0,0,0,0.65)';
+            ctx.shadowBlur = (project.shadowBlur ?? 35) * (targetH / 720);
+            ctx.shadowOffsetY = 12 * (targetH / 720);
+            ctx.fillStyle = '#000000';
+            drawRoundedRect(ctx, frameX, frameY, innerW, innerH, cornerRadius);
+            ctx.fill();
+            ctx.restore();
+          }
+
+          // C. 2. Clip strictly to the Rounded Rectangle Frame (Never squared!)
+          ctx.save();
+          drawRoundedRect(ctx, frameX, frameY, innerW, innerH, cornerRadius);
+          ctx.clip();
+
+          // C. 3. Apply Camera Zoom Transform INSIDE the Rounded Clip
           ctx.save();
           if (zoomScale > 1.001) {
             ctx.translate(focalX, focalY);
@@ -293,41 +335,25 @@ export async function exportFinalEditedVideo(
             ctx.translate(-focalX, -focalY);
           }
 
-          // C. Draw Video Frame with Rounded Corners & Shadow
-          ctx.save();
-          if (project.shadowEnabled) {
-            ctx.shadowColor = 'rgba(0,0,0,0.65)';
-            ctx.shadowBlur = project.shadowBlur ?? 32;
-            ctx.shadowOffsetY = 14;
-          }
-
-          // Rounded clip path
-          ctx.beginPath();
-          if ((ctx as any).roundRect) {
-            (ctx as any).roundRect(paddingPx, paddingPx, innerW, innerH, cornerRadius);
-          } else {
-            ctx.rect(paddingPx, paddingPx, innerW, innerH);
-          }
-          ctx.clip();
-
-          // Render video frame
-          ctx.drawImage(video, 0, 0, videoOrigW, videoOrigH, paddingPx, paddingPx, innerW, innerH);
-          ctx.restore(); // restore shadow & clip
+          // C. 4. Render Video Frame
+          ctx.drawImage(video, 0, 0, videoOrigW, videoOrigH, frameX, frameY, innerW, innerH);
+          ctx.restore(); // restore zoom transform
+          ctx.restore(); // restore rounded clip path
 
           // D. Draw Floating Webcam (if active)
           if (camVideo && project.webcam.enabled) {
             const camSizePx = (project.webcam.size / 100) * (innerW * 0.32);
-            let camX = paddingPx + 24;
-            let camY = paddingPx + 24;
+            let camX = frameX + 24;
+            let camY = frameY + 24;
             if (project.webcam.position === 'TOP_RIGHT') {
-              camX = paddingPx + innerW - camSizePx - 24;
-              camY = paddingPx + 24;
+              camX = frameX + innerW - camSizePx - 24;
+              camY = frameY + 24;
             } else if (project.webcam.position === 'BOTTOM_LEFT') {
-              camX = paddingPx + 24;
-              camY = paddingPx + innerH - camSizePx - 24;
+              camX = frameX + 24;
+              camY = frameY + innerH - camSizePx - 24;
             } else if (project.webcam.position === 'BOTTOM_RIGHT') {
-              camX = paddingPx + innerW - camSizePx - 24;
-              camY = paddingPx + innerH - camSizePx - 24;
+              camX = frameX + innerW - camSizePx - 24;
+              camY = frameY + innerH - camSizePx - 24;
             }
 
             ctx.save();
@@ -335,7 +361,7 @@ export async function exportFinalEditedVideo(
             if (project.webcam.shape === 'circle') {
               ctx.arc(camX + camSizePx / 2, camY + camSizePx / 2, camSizePx / 2, 0, Math.PI * 2);
             } else {
-              (ctx as any).roundRect(camX, camY, camSizePx, camSizePx, 18);
+              drawRoundedRect(ctx, camX, camY, camSizePx, camSizePx, 18 * (targetH / 720));
             }
             ctx.clip();
             ctx.drawImage(camVideo, camX, camY, camSizePx, camSizePx);
@@ -352,8 +378,8 @@ export async function exportFinalEditedVideo(
                 ? (isClicking ? macHand : macArrow)
                 : (isClicking ? winLink : winArrow);
 
-              const mouseCanvasX = paddingPx + (m.x / videoOrigW) * innerW;
-              const mouseCanvasY = paddingPx + (m.y / videoOrigH) * innerH;
+              const mouseCanvasX = frameX + (m.x / videoOrigW) * innerW;
+              const mouseCanvasY = frameY + (m.y / videoOrigH) * innerH;
               const cursorScale = (project.cursor.scale ?? 1.4) * (targetW / 1920);
               const cursorW = 28 * cursorScale;
               const cursorH = 28 * cursorScale;
