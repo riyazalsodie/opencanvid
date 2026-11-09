@@ -15,7 +15,7 @@ export interface ExportProgress {
   error?: string;
 }
 
-// 100% Cross-Browser Anti-Aliased Rounded Rect Path
+// 100% Cross-Browser Anti-Aliased Rounded Rect Path with native roundRect support
 function drawRoundedRect(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -26,16 +26,20 @@ function drawRoundedRect(
 ) {
   const radius = Math.max(0, Math.min(r, w / 2, h / 2));
   ctx.beginPath();
-  ctx.moveTo(x + radius, y);
-  ctx.lineTo(x + w - radius, y);
-  ctx.arcTo(x + w, y, x + w, y + radius, radius);
-  ctx.lineTo(x + w, y + h - radius);
-  ctx.arcTo(x + w, y + h, x + w - radius, y + h, radius);
-  ctx.lineTo(x + radius, y + h);
-  ctx.arcTo(x, y + h, x, y + h - radius, radius);
-  ctx.lineTo(x, y + radius);
-  ctx.arcTo(x, y, x + radius, y, radius);
-  ctx.closePath();
+  if (typeof (ctx as any).roundRect === 'function') {
+    (ctx as any).roundRect(x, y, w, h, radius);
+  } else {
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + w - radius, y);
+    ctx.arcTo(x + w, y, x + w, y + radius, radius);
+    ctx.lineTo(x + w, y + h - radius);
+    ctx.arcTo(x + w, y + h, x + w - radius, y + h, radius);
+    ctx.lineTo(x + radius, y + h);
+    ctx.arcTo(x, y + h, x, y + h - radius, radius);
+    ctx.lineTo(x, y + radius);
+    ctx.arcTo(x, y, x + radius, y, radius);
+    ctx.closePath();
+  }
 }
 
 export async function exportFinalEditedVideo(
@@ -91,11 +95,19 @@ export async function exportFinalEditedVideo(
     const macArrow = new Image(); macArrow.src = MACOS_ARROW_DATA_URL;
     const macHand = new Image(); macHand.src = MACOS_LINK_DATA_URL;
 
-    // Preload Wallpaper if image
+    // Preload Wallpaper if image (Resolve paths relative to base)
     let bgImg: HTMLImageElement | null = null;
     if (project.background.type === 'image' && project.background.value) {
       bgImg = new Image();
-      bgImg.src = project.background.value;
+      let val = project.background.value;
+      if (val.startsWith('./')) {
+        try {
+          val = new URL(val, window.location.href).href;
+        } catch {
+          val = '/' + val.slice(2);
+        }
+      }
+      bgImg.src = val;
     }
 
     await Promise.all([
@@ -103,7 +115,12 @@ export async function exportFinalEditedVideo(
       new Promise((r) => { winLink.onload = r; winLink.onerror = r; }),
       new Promise((r) => { macArrow.onload = r; macArrow.onerror = r; }),
       new Promise((r) => { macHand.onload = r; macHand.onerror = r; }),
-      bgImg ? new Promise((r) => { bgImg!.onload = r; bgImg!.onerror = r; }) : Promise.resolve(),
+      bgImg ? new Promise((r) => {
+        if (bgImg!.complete) return r(null);
+        bgImg!.onload = () => r(null);
+        bgImg!.onerror = () => r(null);
+        setTimeout(r, 1500);
+      }) : Promise.resolve(),
     ]);
 
     // 4. Set up Video Elements (Prefer already active element from viewport to bypass CORS/reloading)
@@ -208,15 +225,19 @@ export async function exportFinalEditedVideo(
       message: 'Rendering real edited frames with smooth zooms & cursor...',
     });
 
-    // 8. Video Dimensions and Insets (Exact Match with Studio Viewport Scaling)
+    // 8. Video Dimensions, Inset & Curved Rounded Window Framing (Canvid Style)
     const videoOrigW = video.videoWidth || 1920;
     const videoOrigH = video.videoHeight || 1080;
-    const scaleFactor = Math.max(0.4, 1 - ((project.padding ?? 8) / 100) * 1.4);
+    const userPadding = project.padding !== undefined ? project.padding : 8;
+    // Scale factor ensures the window never touches the square MP4 edges and floats gracefully
+    const scaleFactor = Math.max(0.4, Math.min(0.94, 1 - (userPadding / 100) * 1.35));
     const innerW = targetW * scaleFactor;
     const innerH = targetH * scaleFactor;
     const frameX = (targetW - innerW) / 2;
     const frameY = (targetH - innerH) / 2;
-    const cornerRadius = Math.max(12, (project.radius ?? 14) * (targetH / 650));
+    // Prominent corner radius matching Canvid's visual curvature (32px - 72px on 1080p)
+    const baseRadius = project.radius !== undefined ? project.radius : 14;
+    const cornerRadius = Math.max(28, Math.round(baseRadius * (targetW / 650)));
 
     // Mouse events helper
     const mouseEvents = project.mouseEvents || [];
@@ -272,16 +293,24 @@ export async function exportFinalEditedVideo(
             return;
           }
 
-          // A. Draw Background
-          if (bgImg) {
-            ctx.drawImage(bgImg, 0, 0, targetW, targetH);
-          } else if (project.background.type === 'color') {
-            ctx.fillStyle = project.background.value || '#000000';
+          // A. Draw Background: Wallpaper (with blur) OR Authentic Canvid Ambient Screen Blur
+          ctx.save();
+          if (bgImg && bgImg.complete && bgImg.naturalWidth > 0) {
+            if (project.backgroundBlur && project.backgroundBlur > 0) {
+              ctx.filter = `blur(${Math.max(12, project.backgroundBlur * 1.6)}px)`;
+            }
+            // Draw wallpaper with bleed to eliminate transparent blur edge artifacts
+            ctx.drawImage(bgImg, -20, -20, targetW + 40, targetH + 40);
+          } else if (project.background.type === 'color' && project.background.value && project.background.value.toLowerCase() !== '#000000') {
+            ctx.fillStyle = project.background.value;
             ctx.fillRect(0, 0, targetW, targetH);
           } else {
-            ctx.fillStyle = '#0a0a0d';
-            ctx.fillRect(0, 0, targetW, targetH);
+            // Canvid Dynamic Ambient Screen Blur:
+            // Renders the active video frame heavily blurred and scaled with cinematic saturation & brightness
+            ctx.filter = 'blur(48px) brightness(0.65) saturate(1.25)';
+            ctx.drawImage(video, -40, -40, targetW + 80, targetH + 80);
           }
+          ctx.restore();
 
           // B. Compute Active Auto-Zoom
           const curMs = currentTimelineSec * 1000;
@@ -313,9 +342,9 @@ export async function exportFinalEditedVideo(
           // C. 1. Draw Outer Drop Shadow Behind the Rounded Frame
           if (project.shadowEnabled) {
             ctx.save();
-            ctx.shadowColor = 'rgba(0,0,0,0.65)';
-            ctx.shadowBlur = (project.shadowBlur ?? 35) * (targetH / 720);
-            ctx.shadowOffsetY = 12 * (targetH / 720);
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.65)';
+            ctx.shadowBlur = Math.max(28, (project.shadowBlur ?? 35) * (targetH / 650));
+            ctx.shadowOffsetY = 14 * (targetH / 650);
             ctx.fillStyle = '#000000';
             drawRoundedRect(ctx, frameX, frameY, innerW, innerH, cornerRadius);
             ctx.fill();
@@ -339,6 +368,14 @@ export async function exportFinalEditedVideo(
           ctx.drawImage(video, 0, 0, videoOrigW, videoOrigH, frameX, frameY, innerW, innerH);
           ctx.restore(); // restore zoom transform
           ctx.restore(); // restore rounded clip path
+
+          // C. 5. Sleek Translucent Window Border (Canvid Signature Polish)
+          ctx.save();
+          drawRoundedRect(ctx, frameX, frameY, innerW, innerH, cornerRadius);
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+          ctx.lineWidth = Math.max(1, 1.5 * (targetH / 1080));
+          ctx.stroke();
+          ctx.restore();
 
           // D. Draw Floating Webcam (if active)
           if (camVideo && project.webcam.enabled) {
