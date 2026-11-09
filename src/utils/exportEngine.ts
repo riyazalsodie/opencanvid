@@ -372,7 +372,7 @@ export async function exportFinalEditedVideo(
       }, 4500);
     });
 
-    if (project.webcam.enabled && (project.camUrl || existingCamElement)) {
+    if (project.webcam.enabled && Boolean(project.camUrl)) {
       if (existingCamElement && existingCamElement.readyState >= 1) {
         camVideo = existingCamElement;
       } else if (project.camUrl) {
@@ -619,8 +619,8 @@ export async function exportFinalEditedVideo(
       ctx.restore(); // Restore rounded window clip
 
       // D. Draw Floating Webcam Overlay
-      if (camVideo && project.webcam.enabled) {
-        const camSizePx = (project.webcam.size / 100) * (innerW * 0.32);
+      if (camVideo && project.webcam.enabled && Boolean(project.camUrl) && camVideo.videoWidth > 0) {
+        const camSizePx = Math.round((project.webcam.size || 200) * (targetW / 960));
         let camX = frameX + 24;
         let camY = frameY + 24;
         if (project.webcam.position === 'TOP_RIGHT') {
