@@ -17,9 +17,11 @@ export interface ExportProgress {
 
 export async function exportFinalEditedVideo(
   project: ProjectState,
-  onProgress: (p: ExportProgress) => void
+  onProgress: (p: ExportProgress) => void,
+  existingVideoElement?: HTMLVideoElement | null,
+  existingCamElement?: HTMLVideoElement | null
 ): Promise<{ success: boolean; filePath?: string; error?: string }> {
-  if (!project.videoUrl) {
+  if (!project.videoUrl && !existingVideoElement) {
     return { success: false, error: 'No video recording found to export.' };
   }
 
@@ -81,31 +83,44 @@ export async function exportFinalEditedVideo(
       bgImg ? new Promise((r) => { bgImg!.onload = r; bgImg!.onerror = r; }) : Promise.resolve(),
     ]);
 
-    // 4. Set up Video Elements
-    const video = document.createElement('video');
-    video.src = project.videoUrl;
-    video.crossOrigin = 'anonymous';
-    video.muted = false;
-    video.volume = project.volume ?? 1;
+    // 4. Set up Video Elements (Prefer already active element from viewport to bypass CORS/reloading)
+    let video: HTMLVideoElement;
+    if (existingVideoElement && existingVideoElement.readyState >= 1) {
+      video = existingVideoElement;
+    } else {
+      video = document.createElement('video');
+      video.playsInline = true;
+      video.muted = false;
+      video.volume = project.volume ?? 1;
+      video.src = project.videoUrl!;
 
-    let camVideo: HTMLVideoElement | null = null;
-    if (project.webcam.enabled && project.camUrl) {
-      camVideo = document.createElement('video');
-      camVideo.src = project.camUrl;
-      camVideo.crossOrigin = 'anonymous';
-      camVideo.muted = true;
+      await new Promise<void>((resolve, reject) => {
+        if (video.readyState >= 1) return resolve();
+        video.onloadedmetadata = () => resolve();
+        video.onerror = () => {
+          console.error('[Export Video Error]', video.error);
+          reject(new Error(`Failed loading source video file: ${video.error?.message || 'code ' + video.error?.code}`));
+        };
+        setTimeout(resolve, 3500); // safety fallback
+      });
     }
 
-    await new Promise<void>((resolve, reject) => {
-      video.onloadedmetadata = () => resolve();
-      video.onerror = () => reject(new Error('Failed loading source video file.'));
-    });
-
-    if (camVideo) {
-      await new Promise<void>((resolve) => {
-        camVideo!.onloadedmetadata = () => resolve();
-        camVideo!.onerror = () => resolve();
-      });
+    let camVideo: HTMLVideoElement | null = null;
+    if (project.webcam.enabled && (project.camUrl || existingCamElement)) {
+      if (existingCamElement && existingCamElement.readyState >= 1) {
+        camVideo = existingCamElement;
+      } else if (project.camUrl) {
+        camVideo = document.createElement('video');
+        camVideo.playsInline = true;
+        camVideo.muted = true;
+        camVideo.src = project.camUrl;
+        await new Promise<void>((resolve) => {
+          if (camVideo!.readyState >= 1) return resolve();
+          camVideo!.onloadedmetadata = () => resolve();
+          camVideo!.onerror = () => resolve();
+          setTimeout(resolve, 1500);
+        });
+      }
     }
 
     // 5. Sorted Clips

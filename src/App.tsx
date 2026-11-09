@@ -880,15 +880,20 @@ export const App: React.FC = () => {
     });
 
     try {
-      const res = await exportFinalEditedVideo(project, (p) => {
-        setExportModal({
-          isOpen: true,
-          progress: p.progress,
-          status: p.status,
-          message: p.message,
-          outputPath: p.outputPath,
-        });
-      });
+      const res = await exportFinalEditedVideo(
+        project,
+        (p) => {
+          setExportModal({
+            isOpen: true,
+            progress: p.progress,
+            status: p.status,
+            message: p.message,
+            outputPath: p.outputPath,
+          });
+        },
+        videoRef.current,
+        camRef.current
+      );
 
       if (!res.success && res.error && res.error !== 'Save dialog was cancelled or write failed.') {
         alert(`Export note: ${res.error}`);
