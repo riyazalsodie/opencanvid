@@ -347,9 +347,26 @@ ipcMain.handle('finalize-export-session', async (_event, { tempDir, totalFrames,
     const ffmpegExe = getFfmpegPath();
     const framePattern = path.join(tempDir, 'frame_%06d.jpg');
     const safeCrf = typeof crf === 'number' ? crf : 18;
-    const ffmpegCmd = `"${ffmpegExe}" -y -framerate ${fps || 30} -i "${framePattern}" ${audioArgs} -c:v libx264 -preset veryfast -crf ${safeCrf} -pix_fmt yuv420p -movflags +faststart "${filePath}"`;
-    log('Running FFmpeg command:', ffmpegCmd);
-    execSync(ffmpegCmd, { stdio: 'pipe', windowsHide: true });
+    const safeFps = fps || 60;
+
+    let encoded = false;
+    try {
+      // 1. Hardware Accelerated GPU Encoding (NVIDIA NVENC)
+      const gpuCmd = `"${ffmpegExe}" -y -framerate ${safeFps} -i "${framePattern}" ${audioArgs} -c:v h264_nvenc -preset p4 -tune hq -rc constqp -qp ${safeCrf} -pix_fmt yuv420p -movflags +faststart "${filePath}"`;
+      log('Running GPU Hardware NVENC command:', gpuCmd);
+      execSync(gpuCmd, { stdio: 'pipe', windowsHide: true });
+      encoded = true;
+      log('Hardware GPU NVENC export succeeded!');
+    } catch (gpuErr) {
+      log('GPU NVENC failed, falling back to CPU encoder:', gpuErr?.message || gpuErr);
+    }
+
+    if (!encoded) {
+      // 2. High-speed CPU Multi-threaded fallback
+      const cpuCmd = `"${ffmpegExe}" -y -framerate ${safeFps} -i "${framePattern}" ${audioArgs} -c:v libx264 -preset veryfast -crf ${safeCrf} -pix_fmt yuv420p -movflags +faststart "${filePath}"`;
+      log('Running CPU command:', cpuCmd);
+      execSync(cpuCmd, { stdio: 'pipe', windowsHide: true });
+    }
 
     try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
 

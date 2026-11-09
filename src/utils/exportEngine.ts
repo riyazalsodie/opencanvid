@@ -103,6 +103,9 @@ function drawImageContain(
 interface SmoothMousePoint {
   x: number;
   y: number;
+  vx: number;
+  vy: number;
+  speed: number;
   isClicking: boolean;
 }
 
@@ -129,26 +132,36 @@ function getInterpolatedMouse(
 
   let x = p2 ? p2.x : 0;
   let y = p2 ? p2.y : 0;
+  let velX = 0;
+  let velY = 0;
 
-  if (smoothing && p1 && p2 && p2.t_ms > p1.t_ms) {
-    const t = Math.max(0, Math.min(1, (curMs - p1.t_ms) / (p2.t_ms - p1.t_ms)));
-    const t2 = t * t;
-    const t3 = t2 * t;
+  if (p1 && p2 && p2.t_ms > p1.t_ms) {
+    const dt = Math.max(1, p2.t_ms - p1.t_ms);
+    velX = ((p2.x - p1.x) / dt) * 16.6;
+    velY = ((p2.y - p1.y) / dt) * 16.6;
 
-    x = 0.5 * (
-      (2 * p1.x) +
-      (-p0.x + p2.x) * t +
-      (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
-      (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3
-    );
+    if (smoothing) {
+      const t = Math.max(0, Math.min(1, (curMs - p1.t_ms) / (p2.t_ms - p1.t_ms)));
+      const t2 = t * t;
+      const t3 = t2 * t;
 
-    y = 0.5 * (
-      (2 * p1.y) +
-      (-p0.y + p2.y) * t +
-      (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
-      (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3
-    );
+      x = 0.5 * (
+        (2 * p1.x) +
+        (-p0.x + p2.x) * t +
+        (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
+        (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3
+      );
+
+      y = 0.5 * (
+        (2 * p1.y) +
+        (-p0.y + p2.y) * t +
+        (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
+        (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3
+      );
+    }
   }
+
+  const curSpeed = Math.sqrt(velX * velX + velY * velY);
 
   let isClick = false;
   const startIdx = Math.max(0, idx - 8);
@@ -161,7 +174,7 @@ function getInterpolatedMouse(
     }
   }
 
-  return { x, y, isClicking: isClick };
+  return { x, y, vx: velX, vy: velY, speed: curSpeed, isClicking: isClick };
 }
 
 // Compute Camera Pan & Zoom matching StudioViewport.tsx 1:1
@@ -228,7 +241,7 @@ export async function exportFinalEditedVideo(
       if (raw) savedSettings = JSON.parse(raw);
     } catch {}
 
-    const fps = savedSettings.frameRate === 60 ? 60 : 30;
+    const fps = savedSettings.frameRate === 30 ? 30 : 60;
 
     // 1. Prepare Export Session in Electron
     const sessionRes = await TauriBridge.prepareExportSession();
@@ -604,6 +617,31 @@ export async function exportFinalEditedVideo(
           ctx.lineWidth = 2.5 * (targetW / 1920) / zoom.level;
           ctx.stroke();
           ctx.restore();
+        }
+
+        // Real Directional Camera Shutter Motion Blur
+        if (project.cursor.motionBlur !== false && mouse.speed > 2.0 && !isClicking) {
+          const blurAmount = Math.min(8.0, Math.max(0, (mouse.speed - 2.0) * 0.18));
+          if (blurAmount > 0.4) {
+            const steps = Math.min(5, Math.max(2, Math.round(blurAmount * 1.2)));
+            const normX = mouse.vx / mouse.speed;
+            const normY = mouse.vy / mouse.speed;
+            for (let s = 1; s <= steps; s++) {
+              const t = s / steps;
+              const smearDist = t * blurAmount * 2.8 * (targetW / 1920) / zoom.level;
+              const alpha = (1 - t) * 0.28;
+              ctx.save();
+              ctx.globalAlpha = alpha;
+              ctx.drawImage(
+                cursorImg,
+                mouseCanvasX + hotspotOffsetX - normX * smearDist,
+                mouseCanvasY + hotspotOffsetY - normY * smearDist,
+                cursorW,
+                cursorH
+              );
+              ctx.restore();
+            }
+          }
         }
 
         ctx.drawImage(
