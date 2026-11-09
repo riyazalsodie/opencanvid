@@ -264,6 +264,75 @@ ipcMain.handle('save-project-file', async (_event, { defaultName, content }) => 
   }
 });
 
+ipcMain.handle('prepare-export-session', async () => {
+  try {
+    const tempDir = path.join(app.getPath('temp'), `opencanvid_frames_${Date.now()}`);
+    fs.mkdirSync(tempDir, { recursive: true });
+    log('Prepared export frames temp dir:', tempDir);
+    return { success: true, tempDir };
+  } catch (e) {
+    log('Failed preparing export session:', e);
+    return { success: false, error: String(e) };
+  }
+});
+
+ipcMain.handle('write-export-frame-batch', async (_event, { tempDir, frames }) => {
+  try {
+    if (!tempDir || !Array.isArray(frames)) return { success: false };
+    for (const f of frames) {
+      const commaIdx = f.dataUrl.indexOf(',');
+      const b64 = commaIdx !== -1 ? f.dataUrl.slice(commaIdx + 1) : f.dataUrl;
+      const buf = Buffer.from(b64, 'base64');
+      const filename = `frame_${String(f.index).padStart(6, '0')}.jpg`;
+      fs.writeFileSync(path.join(tempDir, filename), buf);
+    }
+    return { success: true };
+  } catch (e) {
+    log('Error writing export frame batch:', e);
+    return { success: false, error: String(e) };
+  }
+});
+
+ipcMain.handle('finalize-export-session', async (_event, { tempDir, totalFrames, fps, sourceVideoPath, defaultName }) => {
+  try {
+    const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+      title: 'Export Final Edited Video',
+      defaultPath: defaultName ? (defaultName.endsWith('.mp4') ? defaultName : `${defaultName}.mp4`) : 'OpenCanvid_Export.mp4',
+      filters: [
+        { name: 'MP4 Video (*.mp4)', extensions: ['mp4'] },
+        { name: 'All Files (*.*)', extensions: ['*'] },
+      ],
+    });
+    if (canceled || !filePath) {
+      try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
+      return { success: false };
+    }
+
+    log(`Stitching ${totalFrames} frames from ${tempDir} at ${fps} fps to ${filePath}...`);
+
+    let audioArgs = '';
+    if (sourceVideoPath && fs.existsSync(sourceVideoPath)) {
+      audioArgs = `-i "${sourceVideoPath}" -map 0:v:0 -map 1:a:0? -c:a aac -b:a 192k -shortest`;
+    } else {
+      audioArgs = '-map 0:v:0';
+    }
+
+    const ffmpegCmd = `ffmpeg -y -framerate ${fps || 30} -i "${tempDir}/frame_%06d.jpg" ${audioArgs} -c:v libx264 -preset veryfast -crf 18 -pix_fmt yuv420p -movflags +faststart "${filePath}"`;
+    log('Running FFmpeg command:', ffmpegCmd);
+    execSync(ffmpegCmd, { stdio: 'ignore', windowsHide: true });
+
+    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
+
+    const stat = fs.statSync(filePath);
+    log(`Export succeeded! File size: ${stat.size} bytes: ${filePath}`);
+    return { success: true, filePath, size: stat.size };
+  } catch (e) {
+    log('Error in finalize-export-session:', e);
+    try { if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
+    return { success: false, error: String(e) };
+  }
+});
+
 ipcMain.handle('save-exported-video', async (_event, { defaultName, buffer }) => {
   try {
     const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
@@ -276,32 +345,9 @@ ipcMain.handle('save-exported-video', async (_event, { defaultName, buffer }) =>
       ],
     });
     if (canceled || !filePath) return { success: false };
-
-    const rawBuffer = Buffer.from(buffer);
-
-    // If target is MP4, convert webm buffer via ffmpeg into universal H.264 + AAC MP4
-    if (filePath.toLowerCase().endsWith('.mp4')) {
-      const tempWebm = path.join(app.getPath('temp'), `opencanvid_export_${Date.now()}.webm`);
-      try {
-        log('Exporting video. WebM buffer size:', rawBuffer.length);
-        fs.writeFileSync(tempWebm, rawBuffer);
-        // Execute ffmpeg with fast libx264 + AAC + faststart + CFR 60fps
-        const ffmpegCmd = `ffmpeg -y -i "${tempWebm}" -c:v libx264 -preset veryfast -pix_fmt yuv420p -r 60 -c:a aac -b:a 192k -movflags +faststart "${filePath}"`;
-        execSync(ffmpegCmd, { stdio: 'ignore', windowsHide: true });
-        try { if (fs.existsSync(tempWebm)) fs.unlinkSync(tempWebm); } catch {}
-        log('MP4 export successfully transcoded with ffmpeg to:', filePath);
-        return { success: true, filePath };
-      } catch (ffErr) {
-        log('FFmpeg transcode fallback, writing raw buffer directly:', ffErr);
-        try { if (fs.existsSync(tempWebm)) fs.unlinkSync(tempWebm); } catch {}
-        fs.writeFileSync(filePath, rawBuffer);
-        return { success: true, filePath };
-      }
-    } else {
-      fs.writeFileSync(filePath, rawBuffer);
-      log('Exported video successfully written to:', filePath);
-      return { success: true, filePath };
-    }
+    fs.writeFileSync(filePath, Buffer.from(buffer));
+    log('Exported video successfully written to:', filePath);
+    return { success: true, filePath };
   } catch (e) {
     log('Error saving exported video file:', e);
     return { success: false, error: String(e) };

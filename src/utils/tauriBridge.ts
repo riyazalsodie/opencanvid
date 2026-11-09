@@ -73,6 +73,33 @@ export const TauriBridge = {
     return { success: false };
   },
 
+  async prepareExportSession(): Promise<{ success: boolean; tempDir?: string }> {
+    if (isElectron() && (window as any).electronBridge?.prepareExportSession) {
+      return await (window as any).electronBridge.prepareExportSession();
+    }
+    return { success: false };
+  },
+
+  async writeExportFrameBatch(tempDir: string, frames: { index: number; dataUrl: string }[]): Promise<{ success: boolean }> {
+    if (isElectron() && (window as any).electronBridge?.writeExportFrameBatch) {
+      return await (window as any).electronBridge.writeExportFrameBatch({ tempDir, frames });
+    }
+    return { success: false };
+  },
+
+  async finalizeExportSession(opts: {
+    tempDir: string;
+    totalFrames: number;
+    fps: number;
+    sourceVideoPath?: string;
+    defaultName?: string;
+  }): Promise<{ success: boolean; filePath?: string; size?: number }> {
+    if (isElectron() && (window as any).electronBridge?.finalizeExportSession) {
+      return await (window as any).electronBridge.finalizeExportSession(opts);
+    }
+    return { success: false };
+  },
+
   async saveExportedVideo(defaultName: string, buffer: ArrayBuffer): Promise<{ success: boolean; filePath?: string }> {
     if (isElectron() && (window as any).electronBridge?.saveExportedVideo) {
       return await (window as any).electronBridge.saveExportedVideo({ defaultName, buffer });

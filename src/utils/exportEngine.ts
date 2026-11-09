@@ -15,7 +15,7 @@ export interface ExportProgress {
   error?: string;
 }
 
-// 100% Cross-Browser Anti-Aliased Rounded Rect Path with native roundRect support
+// 100% Cross-Browser Anti-Aliased Rounded Rect Path
 function drawRoundedRect(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -58,11 +58,28 @@ export async function exportFinalEditedVideo(
     message: 'Preparing studio canvas & assets...',
   });
 
-  let canvas: HTMLCanvasElement | null = null;
-  let createdVideoElement: HTMLVideoElement | null = null;
+  let tempDir = '';
+  let video: HTMLVideoElement | null = null;
+  let camVideo: HTMLVideoElement | null = null;
 
   try {
-    // 1. Determine target resolution based on Aspect Ratio
+    // 1. Prepare Export Session in Electron
+    const sessionRes = await TauriBridge.prepareExportSession();
+    if (!sessionRes.success || !sessionRes.tempDir) {
+      throw new Error('Failed to create export session directory.');
+    }
+    tempDir = sessionRes.tempDir;
+
+    // 2. Extract Source File Path for Native Audio Extraction
+    let sourceVideoPath: string | undefined = undefined;
+    if (project.videoUrl?.startsWith('media://local?path=')) {
+      try {
+        const u = new URL(project.videoUrl);
+        sourceVideoPath = decodeURIComponent(u.searchParams.get('path') || '');
+      } catch {}
+    }
+
+    // 3. Determine target resolution based on Aspect Ratio
     let targetW = 1920;
     let targetH = 1080;
     switch (project.aspectRatio) {
@@ -85,29 +102,20 @@ export async function exportFinalEditedVideo(
         break;
     }
 
-    // 2. Hardware Compositor Canvas (Attached to DOM to activate Chromium compositor frame pipeline)
-    canvas = document.createElement('canvas');
+    // 4. Dedicated Offscreen Rendering Canvas
+    const canvas = document.createElement('canvas');
     canvas.width = targetW;
     canvas.height = targetH;
-    canvas.style.position = 'fixed';
-    canvas.style.left = '-99999px';
-    canvas.style.top = '-99999px';
-    canvas.style.width = '1px';
-    canvas.style.height = '1px';
-    canvas.style.opacity = '0';
-    canvas.style.pointerEvents = 'none';
-    canvas.style.zIndex = '-99999';
-    document.body.appendChild(canvas);
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) throw new Error('Could not create canvas 2D rendering context.');
 
-    // 3. Preload Genuine Cursors
+    // 5. Preload Genuine Cursors
     const winArrow = new Image(); winArrow.src = WINDOWS_ARROW_DATA_URL;
     const winLink = new Image(); winLink.src = WINDOWS_LINK_DATA_URL;
     const macArrow = new Image(); macArrow.src = MACOS_ARROW_DATA_URL;
     const macHand = new Image(); macHand.src = MACOS_LINK_DATA_URL;
 
-    // Preload Wallpaper if image (Resolve paths relative to base)
+    // Preload Wallpaper if image
     let bgImg: HTMLImageElement | null = null;
     if (project.background.type === 'image' && project.background.value) {
       bgImg = new Image();
@@ -135,39 +143,31 @@ export async function exportFinalEditedVideo(
       }) : Promise.resolve(),
     ]);
 
-    // 4. Set up Dedicated Video Element Attached to DOM
-    let video: HTMLVideoElement;
-    if (existingVideoElement && existingVideoElement.readyState >= 1) {
+    // 6. Set up Dedicated Video Element for Frame Seeking
+    if (existingVideoElement && existingVideoElement.readyState >= 2) {
       video = existingVideoElement;
     } else {
       video = document.createElement('video');
       video.playsInline = true;
-      video.muted = false;
-      video.volume = project.volume ?? 1;
+      video.muted = true;
       video.src = project.videoUrl!;
-      video.style.position = 'fixed';
-      video.style.left = '-99999px';
-      video.style.top = '-99999px';
-      video.style.width = '1px';
-      video.style.height = '1px';
-      video.style.opacity = '0';
-      video.style.pointerEvents = 'none';
-      video.style.zIndex = '-99999';
-      document.body.appendChild(video);
-      createdVideoElement = video;
+      video.preload = 'auto';
 
       await new Promise<void>((resolve, reject) => {
-        if (video.readyState >= 1) return resolve();
-        video.onloadedmetadata = () => resolve();
-        video.onerror = () => {
-          console.error('[Export Video Error]', video.error);
-          reject(new Error(`Failed loading source video file: ${video.error?.message || 'code ' + video.error?.code}`));
+        if (video!.readyState >= 2) return resolve();
+        video!.onloadeddata = () => resolve();
+        video!.oncanplay = () => resolve();
+        video!.onerror = () => {
+          if (existingVideoElement) {
+            video = existingVideoElement;
+            return resolve();
+          }
+          reject(new Error(`Failed loading source video: ${video?.error?.message || 'code ' + video?.error?.code}`));
         };
-        setTimeout(resolve, 3500); // safety fallback
+        setTimeout(resolve, 3500);
       });
     }
 
-    let camVideo: HTMLVideoElement | null = null;
     if (project.webcam.enabled && (project.camUrl || existingCamElement)) {
       if (existingCamElement && existingCamElement.readyState >= 1) {
         camVideo = existingCamElement;
@@ -185,7 +185,7 @@ export async function exportFinalEditedVideo(
       }
     }
 
-    // 5. Sorted Clips
+    // 7. Calculate Timeline & Active Clips
     const safeDur = project.duration > 0 ? project.duration : 12;
     const clips: VideoClip[] = (project.clips && project.clips.length > 0)
       ? [...project.clips].sort((a, b) => a.start - b.start)
@@ -194,73 +194,18 @@ export async function exportFinalEditedVideo(
     const totalDurationSec = clips.reduce((acc, c) => acc + Math.max(0.05, c.end - c.start), 0);
     if (totalDurationSec <= 0) throw new Error('Video duration is 0.');
 
-    // Paint initial dark frame on canvas before stream capture
-    ctx.fillStyle = '#0a0a0d';
-    ctx.fillRect(0, 0, targetW, targetH);
+    const fps = 30; // 30 FPS broadcast standard
+    const totalFrames = Math.max(1, Math.round(totalDurationSec * fps));
 
-    // 6. Setup MediaStream & Audio
-    const canvasStream = canvas.captureStream(60);
-    let combinedStream = canvasStream;
-
-    try {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (AudioCtx) {
-        const audioCtx = new AudioCtx();
-        const dest = audioCtx.createMediaStreamDestination();
-        const vSource = audioCtx.createMediaElementSource(video);
-        vSource.connect(dest);
-        const aTracks = dest.stream.getAudioTracks();
-        if (aTracks.length > 0) {
-          combinedStream = new MediaStream([
-            ...canvasStream.getVideoTracks(),
-            ...aTracks,
-          ]);
-        }
-      }
-    } catch {
-      // Audio fallback to canvas-only stream if already piped
-      combinedStream = canvasStream;
-    }
-
-    // 7. Pick Best Supported MimeType (VP9/VP8 WebM is 100% reliable for canvas streams; Electron transcodes to MP4 via FFmpeg)
-    let mimeType = 'video/webm;codecs=vp9,opus';
-    if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')) {
-      mimeType = 'video/webm;codecs=vp9,opus';
-    } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')) {
-      mimeType = 'video/webm;codecs=vp8,opus';
-    } else if (MediaRecorder.isTypeSupported('video/webm')) {
-      mimeType = 'video/webm';
-    }
-
-    const recordedChunks: Blob[] = [];
-    const recorder = new MediaRecorder(combinedStream, {
-      mimeType,
-      videoBitsPerSecond: 16_000_000, // Crisp 16 Mbps UHD bitrate
-    });
-
-    recorder.ondataavailable = (e) => {
-      if (e.data && e.data.size > 0) {
-        recordedChunks.push(e.data);
-      }
-    };
-
-    onProgress({
-      progress: 10,
-      status: 'rendering',
-      message: 'Rendering real edited frames with smooth zooms & cursor...',
-    });
-
-    // 8. Video Dimensions, Inset & Curved Rounded Window Framing (Canvid Style)
+    // 8. Geometry & Styling
     const videoOrigW = video.videoWidth || 1920;
     const videoOrigH = video.videoHeight || 1080;
     const userPadding = project.padding !== undefined ? project.padding : 8;
-    // Scale factor ensures the window never touches the square MP4 edges and floats gracefully
     const scaleFactor = Math.max(0.4, Math.min(0.94, 1 - (userPadding / 100) * 1.35));
     const innerW = targetW * scaleFactor;
     const innerH = targetH * scaleFactor;
     const frameX = (targetW - innerW) / 2;
     const frameY = (targetH - innerH) / 2;
-    // Prominent corner radius matching Canvid's visual curvature (32px - 72px on 1080p)
     const baseRadius = project.radius !== undefined ? project.radius : 14;
     const cornerRadius = Math.max(28, Math.round(baseRadius * (targetW / 650)));
 
@@ -279,303 +224,270 @@ export async function exportFinalEditedVideo(
       return mouseEvents[idx];
     };
 
-    // 9. Play through each clip sequentially
-    let elapsedGlobalTime = 0;
-    let recorderStarted = false;
+    onProgress({
+      progress: 10,
+      status: 'rendering',
+      message: `Rendering ${totalFrames} frames with Canvid curvature & screen blur...`,
+    });
 
-    for (let cIdx = 0; cIdx < clips.length; cIdx++) {
-      const clip = clips[cIdx];
-      const clipDuration = Math.max(0.05, clip.end - clip.start);
+    // 9. Frame-by-Frame Deterministic Rendering Loop
+    let frameBatch: { index: number; dataUrl: string }[] = [];
 
-      // Seek video to clip's source start
-      video.currentTime = clip.sourceStart;
-      if (camVideo) camVideo.currentTime = clip.sourceStart;
+    for (let frameIdx = 0; frameIdx < totalFrames; frameIdx++) {
+      const currentTimelineSec = frameIdx / fps;
 
-      await new Promise<void>((resolve) => {
-        const onSeeked = () => {
-          video.removeEventListener('seeked', onSeeked);
-          resolve();
-        };
-        video.addEventListener('seeked', onSeeked);
-        setTimeout(resolve, 200); // safety fallback
-      });
+      // Map current timeline second to exact clip & source video time
+      let runningSec = 0;
+      let activeClip = clips[0];
+      let clipOffsetSec = 0;
 
-      // Start recorder once video is actively positioned at real frame
-      if (!recorderStarted) {
-        recorder.start(100);
-        recorderStarted = true;
+      for (let i = 0; i < clips.length; i++) {
+        const c = clips[i];
+        const d = Math.max(0.05, c.end - c.start);
+        if (currentTimelineSec >= runningSec && currentTimelineSec < runningSec + d) {
+          activeClip = c;
+          clipOffsetSec = currentTimelineSec - runningSec;
+          break;
+        }
+        if (i === clips.length - 1) {
+          activeClip = c;
+          clipOffsetSec = Math.min(d, currentTimelineSec - runningSec);
+        }
+        runningSec += d;
       }
 
-      // Ensure video has decoded frame data
-      if (video.readyState < 2) {
+      const videoTargetTime = activeClip.sourceStart + clipOffsetSec;
+
+      // Seek video to frame timestamp
+      if (Math.abs(video.currentTime - videoTargetTime) > 0.025) {
+        video.currentTime = videoTargetTime;
         await new Promise<void>((r) => {
-          const onCanPlay = () => {
-            video.removeEventListener('canplay', onCanPlay);
+          const onSeek = () => {
+            video!.removeEventListener('seeked', onSeek);
             r();
           };
-          video.addEventListener('canplay', onCanPlay);
-          setTimeout(r, 300);
+          video!.addEventListener('seeked', onSeek);
+          setTimeout(r, 80); // Safety fallback
         });
       }
 
-      try {
-        await video.play();
-      } catch {
-        video.muted = true;
-        await video.play().catch(() => {});
+      const vw = video.videoWidth > 0 ? video.videoWidth : videoOrigW;
+      const vh = video.videoHeight > 0 ? video.videoHeight : videoOrigH;
+
+      // A. Draw Background: Wallpaper (with blur) OR Authentic Canvid Ambient Screen Blur
+      ctx.save();
+      if (bgImg && bgImg.complete && bgImg.naturalWidth > 0) {
+        if (project.backgroundBlur && project.backgroundBlur > 0) {
+          ctx.filter = `blur(${Math.max(12, project.backgroundBlur * 1.6)}px)`;
+        }
+        ctx.drawImage(bgImg, -20, -20, targetW + 40, targetH + 40);
+      } else if (project.background.type === 'color' && project.background.value && project.background.value.toLowerCase() !== '#000000') {
+        ctx.fillStyle = project.background.value;
+        ctx.fillRect(0, 0, targetW, targetH);
+      } else {
+        // Canvid Signature Ambient Screen Blur
+        ctx.filter = 'blur(48px) brightness(0.65) saturate(1.25)';
+        ctx.drawImage(video, 0, 0, vw, vh, -40, -40, targetW + 80, targetH + 80);
       }
-      if (camVideo) await camVideo.play().catch(() => {});
+      ctx.restore();
 
-      const clipStartWallTime = performance.now();
+      // B. Compute Auto-Zoom Transform
+      const curMs = currentTimelineSec * 1000;
+      const activeZoom = (project.zooms || []).find((z) => curMs >= z.start && curMs <= z.end);
 
-      await new Promise<void>((resolveClip) => {
-        let animId: number;
+      let zoomScale = 1.0;
+      let focalX = targetW / 2;
+      let focalY = targetH / 2;
 
-        const renderFrame = () => {
-          const now = performance.now();
-          const elapsedInClip = (now - clipStartWallTime) / 1000;
-          const currentTimelineSec = elapsedGlobalTime + elapsedInClip;
+      if (activeZoom) {
+        const zDur = Math.max(100, activeZoom.end - activeZoom.start);
+        const zProgress = (curMs - activeZoom.start) / zDur;
+        let ease = 1.0;
+        if (zProgress < 0.25) {
+          ease = zProgress / 0.25;
+        } else if (zProgress > 0.75) {
+          ease = 1 - (zProgress - 0.75) / 0.25;
+        }
+        zoomScale = 1 + (activeZoom.level - 1) * ease;
 
-          // Never abort prematurely on video.ended — strictly render until clip duration completes
-          if (elapsedInClip >= clipDuration) {
-            cancelAnimationFrame(animId);
-            resolveClip();
-            return;
-          }
+        if (activeZoom.focal_x !== undefined && activeZoom.focal_y !== undefined) {
+          focalX = frameX + (activeZoom.focal_x * innerW);
+          focalY = frameY + (activeZoom.focal_y * innerH);
+        }
+      }
 
-          const vw = video.videoWidth > 0 ? video.videoWidth : (videoOrigW || 1920);
-          const vh = video.videoHeight > 0 ? video.videoHeight : (videoOrigH || 1080);
+      // C. 1. Outer Soft Drop Shadow
+      if (project.shadowEnabled) {
+        ctx.save();
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.65)';
+        ctx.shadowBlur = Math.max(28, (project.shadowBlur ?? 35) * (targetH / 650));
+        ctx.shadowOffsetY = 14 * (targetH / 650);
+        ctx.fillStyle = '#000000';
+        drawRoundedRect(ctx, frameX, frameY, innerW, innerH, cornerRadius);
+        ctx.fill();
+        ctx.restore();
+      }
 
-          // A. Draw Background: Wallpaper (with blur) OR Authentic Canvid Ambient Screen Blur
-          ctx.save();
-          if (bgImg && bgImg.complete && bgImg.naturalWidth > 0) {
-            if (project.backgroundBlur && project.backgroundBlur > 0) {
-              ctx.filter = `blur(${Math.max(12, project.backgroundBlur * 1.6)}px)`;
-            }
-            // Draw wallpaper with bleed to eliminate transparent blur edge artifacts
-            ctx.drawImage(bgImg, -20, -20, targetW + 40, targetH + 40);
-          } else if (project.background.type === 'color' && project.background.value && project.background.value.toLowerCase() !== '#000000') {
-            ctx.fillStyle = project.background.value;
-            ctx.fillRect(0, 0, targetW, targetH);
-          } else {
-            // Canvid Dynamic Ambient Screen Blur:
-            // Renders the active video frame heavily blurred and scaled with cinematic saturation & brightness
-            ctx.filter = 'blur(48px) brightness(0.65) saturate(1.25)';
-            ctx.drawImage(video, 0, 0, vw, vh, -40, -40, targetW + 80, targetH + 80);
-          }
-          ctx.restore();
+      // C. 2. Rounded Window Clip
+      ctx.save();
+      drawRoundedRect(ctx, frameX, frameY, innerW, innerH, cornerRadius);
+      ctx.clip();
 
-          // B. Compute Active Auto-Zoom
-          const curMs = currentTimelineSec * 1000;
-          const activeZoom = (project.zooms || []).find((z) => curMs >= z.start && curMs <= z.end);
+      // C. 3. Apply Camera Zoom Transform
+      ctx.save();
+      if (zoomScale > 1.001) {
+        ctx.translate(focalX, focalY);
+        ctx.scale(zoomScale, zoomScale);
+        ctx.translate(-focalX, -focalY);
+      }
 
-          let zoomScale = 1.0;
-          let focalX = targetW / 2;
-          let focalY = targetH / 2;
+      // C. 4. Render Sharp Video Frame
+      ctx.drawImage(video, 0, 0, vw, vh, frameX, frameY, innerW, innerH);
+      ctx.restore(); // restore zoom
+      ctx.restore(); // restore clip
 
-          if (activeZoom) {
-            const zDur = Math.max(100, activeZoom.end - activeZoom.start);
-            const zProgress = (curMs - activeZoom.start) / zDur;
-            // Spring ease-in / ease-out
-            let ease = 1.0;
-            if (zProgress < 0.25) {
-              ease = (zProgress / 0.25);
-            } else if (zProgress > 0.75) {
-              ease = 1 - (zProgress - 0.75) / 0.25;
-            }
-            zoomScale = 1 + (activeZoom.level - 1) * ease;
+      // C. 5. Sleek Translucent Window Border Accent
+      ctx.save();
+      drawRoundedRect(ctx, frameX, frameY, innerW, innerH, cornerRadius);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+      ctx.lineWidth = Math.max(1, 1.5 * (targetH / 1080));
+      ctx.stroke();
+      ctx.restore();
 
-            // Focal coordinates relative to the video frame
-            if (activeZoom.focal_x !== undefined && activeZoom.focal_y !== undefined) {
-              focalX = frameX + (activeZoom.focal_x * innerW);
-              focalY = frameY + (activeZoom.focal_y * innerH);
-            }
-          }
+      // D. Draw Floating Webcam Overlay
+      if (camVideo && project.webcam.enabled) {
+        const camSizePx = (project.webcam.size / 100) * (innerW * 0.32);
+        let camX = frameX + 24;
+        let camY = frameY + 24;
+        if (project.webcam.position === 'TOP_RIGHT') {
+          camX = frameX + innerW - camSizePx - 24;
+          camY = frameY + 24;
+        } else if (project.webcam.position === 'BOTTOM_LEFT') {
+          camX = frameX + 24;
+          camY = frameY + innerH - camSizePx - 24;
+        } else if (project.webcam.position === 'BOTTOM_RIGHT') {
+          camX = frameX + innerW - camSizePx - 24;
+          camY = frameY + innerH - camSizePx - 24;
+        }
 
-          // C. 1. Draw Outer Drop Shadow Behind the Rounded Frame
-          if (project.shadowEnabled) {
-            ctx.save();
-            ctx.shadowColor = 'rgba(0, 0, 0, 0.65)';
-            ctx.shadowBlur = Math.max(28, (project.shadowBlur ?? 35) * (targetH / 650));
-            ctx.shadowOffsetY = 14 * (targetH / 650);
-            ctx.fillStyle = '#000000';
-            drawRoundedRect(ctx, frameX, frameY, innerW, innerH, cornerRadius);
-            ctx.fill();
-            ctx.restore();
-          }
+        ctx.save();
+        ctx.beginPath();
+        if (project.webcam.shape === 'circle') {
+          ctx.arc(camX + camSizePx / 2, camY + camSizePx / 2, camSizePx / 2, 0, Math.PI * 2);
+        } else {
+          drawRoundedRect(ctx, camX, camY, camSizePx, camSizePx, 16);
+        }
+        ctx.closePath();
+        ctx.clip();
 
-          // C. 2. Clip strictly to the Rounded Rectangle Frame (Never squared!)
-          ctx.save();
-          drawRoundedRect(ctx, frameX, frameY, innerW, innerH, cornerRadius);
-          ctx.clip();
+        if (project.webcam.mirrored) {
+          ctx.translate(camX + camSizePx, camY);
+          ctx.scale(-1, 1);
+          ctx.drawImage(camVideo, 0, 0, camSizePx, camSizePx);
+        } else {
+          ctx.drawImage(camVideo, camX, camY, camSizePx, camSizePx);
+        }
+        ctx.restore();
 
-          // C. 3. Apply Camera Zoom Transform INSIDE the Rounded Clip
-          ctx.save();
-          if (zoomScale > 1.001) {
-            ctx.translate(focalX, focalY);
-            ctx.scale(zoomScale, zoomScale);
-            ctx.translate(-focalX, -focalY);
-          }
+        // Webcam subtle border
+        ctx.save();
+        ctx.beginPath();
+        if (project.webcam.shape === 'circle') {
+          ctx.arc(camX + camSizePx / 2, camY + camSizePx / 2, camSizePx / 2, 0, Math.PI * 2);
+        } else {
+          drawRoundedRect(ctx, camX, camY, camSizePx, camSizePx, 16);
+        }
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.restore();
+      }
 
-          // C. 4. Render Video Frame
-          ctx.drawImage(video, 0, 0, vw, vh, frameX, frameY, innerW, innerH);
-          ctx.restore(); // restore zoom transform
-          ctx.restore(); // restore rounded clip path
+      // E. Draw Cursor
+      if (project.cursor.visible) {
+        ctx.save();
+        if (zoomScale > 1.001) {
+          ctx.translate(focalX, focalY);
+          ctx.scale(zoomScale, zoomScale);
+          ctx.translate(-focalX, -focalY);
+        }
 
-          // Notify canvas video track to capture the freshly rendered frame
-          const vTrack = canvasStream.getVideoTracks()[0];
-          if (vTrack && (vTrack as any).requestFrame) {
-            (vTrack as any).requestFrame();
-          }
+        const m = getMouseAtTime(curMs);
+        if (m) {
+          const curTheme = project.cursor.theme || 'mac';
+          const isClicking = m.event_type === 'lclick';
+          const cursorImg = curTheme === 'mac'
+            ? (isClicking ? macHand : macArrow)
+            : (isClicking ? winLink : winArrow);
 
-          // C. 5. Sleek Translucent Window Border (Canvid Signature Polish)
-          ctx.save();
-          drawRoundedRect(ctx, frameX, frameY, innerW, innerH, cornerRadius);
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
-          ctx.lineWidth = Math.max(1, 1.5 * (targetH / 1080));
-          ctx.stroke();
-          ctx.restore();
+          const mouseCanvasX = frameX + (m.x / videoOrigW) * innerW;
+          const mouseCanvasY = frameY + (m.y / videoOrigH) * innerH;
+          const cursorScale = (project.cursor.scale ?? 1.4) * (targetW / 1920);
+          const cursorW = 28 * cursorScale;
+          const cursorH = 28 * cursorScale;
 
-          // D. Draw Floating Webcam (if active)
-          if (camVideo && project.webcam.enabled) {
-            const camSizePx = (project.webcam.size / 100) * (innerW * 0.32);
-            let camX = frameX + 24;
-            let camY = frameY + 24;
-            if (project.webcam.position === 'TOP_RIGHT') {
-              camX = frameX + innerW - camSizePx - 24;
-              camY = frameY + 24;
-            } else if (project.webcam.position === 'BOTTOM_LEFT') {
-              camX = frameX + 24;
-              camY = frameY + innerH - camSizePx - 24;
-            } else if (project.webcam.position === 'BOTTOM_RIGHT') {
-              camX = frameX + innerW - camSizePx - 24;
-              camY = frameY + innerH - camSizePx - 24;
-            }
-
+          // Click ripple effect
+          if (project.cursor.clickEffect === 'ripple' && isClicking) {
             ctx.save();
             ctx.beginPath();
-            if (project.webcam.shape === 'circle') {
-              ctx.arc(camX + camSizePx / 2, camY + camSizePx / 2, camSizePx / 2, 0, Math.PI * 2);
-            } else {
-              drawRoundedRect(ctx, camX, camY, camSizePx, camSizePx, 18 * (targetH / 720));
-            }
-            ctx.clip();
-            ctx.drawImage(camVideo, camX, camY, camSizePx, camSizePx);
+            ctx.arc(mouseCanvasX, mouseCanvasY, 26 * cursorScale, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(59, 130, 246, 0.7)';
+            ctx.lineWidth = 3;
+            ctx.stroke();
             ctx.restore();
           }
 
-          // E. Draw Vector Mouse Cursor (Authentic OS Quality with Motion Blur)
-          if (project.cursor.visible) {
-            const m = getMouseAtTime(curMs);
-            if (m) {
-              const curTheme = project.cursor.theme || 'mac';
-              const isClicking = m.event_type === 'lclick';
-              const cursorImg = curTheme === 'mac'
-                ? (isClicking ? macHand : macArrow)
-                : (isClicking ? winLink : winArrow);
+          ctx.drawImage(cursorImg, mouseCanvasX, mouseCanvasY, cursorW, cursorH);
+        }
 
-              const mouseCanvasX = frameX + (m.x / videoOrigW) * innerW;
-              const mouseCanvasY = frameY + (m.y / videoOrigH) * innerH;
-              const cursorScale = (project.cursor.scale ?? 1.4) * (targetW / 1920);
-              const cursorW = 28 * cursorScale;
-              const cursorH = 28 * cursorScale;
+        ctx.restore();
+      }
 
-              // Click ripple effect
-              if (project.cursor.clickEffect === 'ripple' && isClicking) {
-                ctx.save();
-                ctx.beginPath();
-                ctx.arc(mouseCanvasX, mouseCanvasY, 26 * cursorScale, 0, Math.PI * 2);
-                ctx.strokeStyle = 'rgba(59, 130, 246, 0.7)';
-                ctx.lineWidth = 3;
-                ctx.stroke();
-                ctx.restore();
-              }
+      // Serialize frame
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+      frameBatch.push({ index: frameIdx, dataUrl });
 
-              // Motion blur: calculate delta from previous point
-              const prevM = getMouseAtTime(curMs - 35);
-              const vx = prevM ? (m.x - prevM.x) : 0;
-              const vy = prevM ? (m.y - prevM.y) : 0;
-              const speed = Math.hypot(vx, vy);
+      // Write batch to disk every 15 frames or on final frame
+      if (frameBatch.length >= 15 || frameIdx === totalFrames - 1) {
+        await TauriBridge.writeExportFrameBatch(tempDir, frameBatch);
+        frameBatch = [];
+      }
 
-              if (project.cursor.motionBlur && speed > 2) {
-                ctx.save();
-                ctx.globalAlpha = 0.35;
-                ctx.drawImage(
-                  cursorImg,
-                  mouseCanvasX - vx * 0.4,
-                  mouseCanvasY - vy * 0.4,
-                  cursorW,
-                  cursorH
-                );
-                ctx.restore();
-              }
-
-              // Draw authentic crisp cursor
-              ctx.drawImage(cursorImg, mouseCanvasX, mouseCanvasY, cursorW, cursorH);
-            }
-          }
-
-          // Restore zoom transform
-          ctx.restore();
-
-          // Progress update
-          const overallPct = Math.min(
-            92,
-            Math.round(10 + ((currentTimelineSec / totalDurationSec) * 82))
-          );
-          onProgress({
-            progress: overallPct,
-            status: 'rendering',
-            message: `Rendering frame at ${currentTimelineSec.toFixed(1)}s / ${totalDurationSec.toFixed(1)}s (${overallPct}%)...`,
-          });
-
-          animId = requestAnimationFrame(renderFrame);
-        };
-
-        animId = requestAnimationFrame(renderFrame);
+      // Update progress
+      const pct = Math.min(88, Math.round(10 + ((frameIdx / totalFrames) * 78)));
+      onProgress({
+        progress: pct,
+        status: 'rendering',
+        message: `Rendering frame ${frameIdx + 1} of ${totalFrames} (${pct}%)...`,
       });
-
-      video.pause();
-      if (camVideo) camVideo.pause();
-      elapsedGlobalTime += clipDuration;
     }
 
-    // 10. Stop recording and collect buffer
+    // 10. Finalize & Stitch with FFmpeg
     onProgress({
-      progress: 94,
+      progress: 92,
       status: 'saving',
-      message: 'Encoding final MP4 video stream...',
-    });
-
-    recorder.stop();
-
-    const finalBlob = await new Promise<Blob>((res) => {
-      recorder.onstop = () => {
-        res(new Blob(recordedChunks, { type: mimeType }));
-      };
-    });
-
-    const arrayBuffer = await finalBlob.arrayBuffer();
-
-    onProgress({
-      progress: 97,
-      status: 'saving',
-      message: 'Saving final edited file to disk...',
+      message: 'Encoding final MP4 video with FFmpeg...',
     });
 
     const defaultFilename = `${project.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_Edited.mp4`;
-    const saveResult = await TauriBridge.saveExportedVideo(defaultFilename, arrayBuffer);
+    const res = await TauriBridge.finalizeExportSession({
+      tempDir,
+      totalFrames,
+      fps,
+      sourceVideoPath,
+      defaultName: defaultFilename,
+    });
 
-    if (saveResult.success) {
+    if (res.success && res.filePath) {
       onProgress({
         progress: 100,
         status: 'done',
         message: 'Export Complete!',
-        outputPath: saveResult.filePath,
+        outputPath: res.filePath,
       });
-      return { success: true, filePath: saveResult.filePath };
+      return { success: true, filePath: res.filePath };
     } else {
-      throw new Error('Save dialog was cancelled or write failed.');
+      throw new Error('Save dialog was cancelled or export failed.');
     }
   } catch (err: any) {
     onProgress({
@@ -585,12 +497,5 @@ export async function exportFinalEditedVideo(
       error: String(err),
     });
     return { success: false, error: err?.message || String(err) };
-  } finally {
-    if (canvas && canvas.parentNode) canvas.parentNode.removeChild(canvas);
-    if (createdVideoElement && createdVideoElement.parentNode) {
-      createdVideoElement.pause();
-      createdVideoElement.src = '';
-      createdVideoElement.parentNode.removeChild(createdVideoElement);
-    }
   }
 }
