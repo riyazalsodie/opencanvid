@@ -96,6 +96,11 @@ export const StudioViewport: React.FC<StudioViewportProps> = React.memo(({
     let lastThrottledTime = 0;
 
     const tick = () => {
+      // Yield full hardware control of video clock to export engine during export
+      if (isExporting) {
+        animId = requestAnimationFrame(tick);
+        return;
+      }
       const v = videoRef.current;
       if (v) {
         if (!v.paused) {

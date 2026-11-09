@@ -284,7 +284,24 @@ export async function exportFinalEditedVideo(
         recorderStarted = true;
       }
 
-      await video.play().catch(() => {});
+      // Ensure video has decoded frame data
+      if (video.readyState < 2) {
+        await new Promise<void>((r) => {
+          const onCanPlay = () => {
+            video.removeEventListener('canplay', onCanPlay);
+            r();
+          };
+          video.addEventListener('canplay', onCanPlay);
+          setTimeout(r, 300);
+        });
+      }
+
+      try {
+        await video.play();
+      } catch {
+        video.muted = true;
+        await video.play().catch(() => {});
+      }
       if (camVideo) await camVideo.play().catch(() => {});
 
       const clipStartWallTime = performance.now();
@@ -297,11 +314,15 @@ export async function exportFinalEditedVideo(
           const elapsedInClip = (now - clipStartWallTime) / 1000;
           const currentTimelineSec = elapsedGlobalTime + elapsedInClip;
 
-          if (elapsedInClip >= clipDuration || video.ended) {
+          // Never abort prematurely on video.ended — strictly render until clip duration completes
+          if (elapsedInClip >= clipDuration) {
             cancelAnimationFrame(animId);
             resolveClip();
             return;
           }
+
+          const vw = video.videoWidth > 0 ? video.videoWidth : (videoOrigW || 1920);
+          const vh = video.videoHeight > 0 ? video.videoHeight : (videoOrigH || 1080);
 
           // A. Draw Background: Wallpaper (with blur) OR Authentic Canvid Ambient Screen Blur
           ctx.save();
@@ -318,7 +339,7 @@ export async function exportFinalEditedVideo(
             // Canvid Dynamic Ambient Screen Blur:
             // Renders the active video frame heavily blurred and scaled with cinematic saturation & brightness
             ctx.filter = 'blur(48px) brightness(0.65) saturate(1.25)';
-            ctx.drawImage(video, -40, -40, targetW + 80, targetH + 80);
+            ctx.drawImage(video, 0, 0, vw, vh, -40, -40, targetW + 80, targetH + 80);
           }
           ctx.restore();
 
@@ -375,9 +396,15 @@ export async function exportFinalEditedVideo(
           }
 
           // C. 4. Render Video Frame
-          ctx.drawImage(video, 0, 0, videoOrigW, videoOrigH, frameX, frameY, innerW, innerH);
+          ctx.drawImage(video, 0, 0, vw, vh, frameX, frameY, innerW, innerH);
           ctx.restore(); // restore zoom transform
           ctx.restore(); // restore rounded clip path
+
+          // Notify canvas video track to capture the freshly rendered frame
+          const vTrack = canvasStream.getVideoTracks()[0];
+          if (vTrack && (vTrack as any).requestFrame) {
+            (vTrack as any).requestFrame();
+          }
 
           // C. 5. Sleek Translucent Window Border (Canvid Signature Polish)
           ctx.save();
