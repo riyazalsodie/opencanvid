@@ -1,5 +1,6 @@
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
-import type { ProjectState, ZoomKeyframe } from '../types/canvid';
+import { Scissors } from 'lucide-react';
+import type { ProjectState, ZoomKeyframe, VideoClip } from '../types/canvid';
 
 interface TimelineProps {
   project: ProjectState;
@@ -8,6 +9,7 @@ interface TimelineProps {
   onAddZoom?: () => void;
   onDeleteZoom: (id: string) => void;
   onUpdateZoom?: (id: string, updates: Partial<ZoomKeyframe>) => void;
+  onUpdateClip?: (id: string, updates: Partial<VideoClip>) => void;
   onSetSpeed?: (speed: number) => void;
   selectedZoomId: string | null;
   onSelectZoom: (id: string | null) => void;
@@ -22,6 +24,7 @@ export const Timeline: React.FC<TimelineProps> = React.memo(({
   project,
   onSeek,
   onUpdateZoom,
+  onUpdateClip,
   selectedZoomId,
   onSelectZoom,
   selectedClipId,
@@ -38,6 +41,15 @@ export const Timeline: React.FC<TimelineProps> = React.memo(({
     initialX: number;
     initialStart: number;
     initialEnd: number;
+  } | null>(null);
+
+  const [draggingClip, setDraggingClip] = useState<{
+    id: string;
+    type: 'resize-start' | 'resize-end';
+    initialX: number;
+    initialStart: number;
+    initialEnd: number;
+    initialSourceStart: number;
   } | null>(null);
 
   // Safe time formatting (MM:SS)
@@ -85,35 +97,66 @@ export const Timeline: React.FC<TimelineProps> = React.memo(({
     }
   };
 
-  // Dragging / Resizing Zoom Blocks
+  // Dragging / Resizing Zoom Blocks & Trimming Video Clips
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
-      if (!draggingZoom || !trackRef.current || !onUpdateZoom) return;
+      if (!trackRef.current) return;
       const rect = trackRef.current.getBoundingClientRect();
-      const deltaX = e.clientX - draggingZoom.initialX;
-      const deltaMs = (deltaX / rect.width) * safeDuration * 1000;
 
-      if (draggingZoom.type === 'move') {
-        const dur = draggingZoom.initialEnd - draggingZoom.initialStart;
-        const newStart = Math.max(0, Math.min(safeDuration * 1000 - dur, draggingZoom.initialStart + deltaMs));
-        onUpdateZoom(draggingZoom.id, {
-          start: Math.round(newStart),
-          end: Math.round(newStart + dur),
-        });
-      } else if (draggingZoom.type === 'resize-start') {
-        const newStart = Math.max(0, Math.min(draggingZoom.initialEnd - 300, draggingZoom.initialStart + deltaMs));
-        onUpdateZoom(draggingZoom.id, { start: Math.round(newStart) });
-      } else if (draggingZoom.type === 'resize-end') {
-        const newEnd = Math.max(draggingZoom.initialStart + 300, Math.min(safeDuration * 1000, draggingZoom.initialEnd + deltaMs));
-        onUpdateZoom(draggingZoom.id, { end: Math.round(newEnd) });
+      // 1. Resizing / Moving Zoom Keyframe Pills
+      if (draggingZoom && onUpdateZoom) {
+        const deltaX = e.clientX - draggingZoom.initialX;
+        const deltaMs = (deltaX / rect.width) * safeDuration * 1000;
+
+        if (draggingZoom.type === 'move') {
+          const dur = draggingZoom.initialEnd - draggingZoom.initialStart;
+          const newStart = Math.max(0, Math.min(safeDuration * 1000 - dur, draggingZoom.initialStart + deltaMs));
+          onUpdateZoom(draggingZoom.id, {
+            start: Math.round(newStart),
+            end: Math.round(newStart + dur),
+          });
+        } else if (draggingZoom.type === 'resize-start') {
+          const newStart = Math.max(0, Math.min(draggingZoom.initialEnd - 300, draggingZoom.initialStart + deltaMs));
+          onUpdateZoom(draggingZoom.id, { start: Math.round(newStart) });
+        } else if (draggingZoom.type === 'resize-end') {
+          const newEnd = Math.max(draggingZoom.initialStart + 300, Math.min(safeDuration * 1000, draggingZoom.initialEnd + deltaMs));
+          onUpdateZoom(draggingZoom.id, { end: Math.round(newEnd) });
+        }
+      }
+
+      // 2. Trimming / Resizing Video Clips (Making Cut Clips Smaller / Shorter)
+      if (draggingClip && onUpdateClip) {
+        const deltaX = e.clientX - draggingClip.initialX;
+        const deltaSec = (deltaX / rect.width) * safeDuration;
+
+        if (draggingClip.type === 'resize-end') {
+          // Shrink or expand right end of clip
+          const newEnd = Math.max(
+            draggingClip.initialStart + 0.1,
+            Math.min(safeDuration, draggingClip.initialEnd + deltaSec)
+          );
+          onUpdateClip(draggingClip.id, { end: Number(newEnd.toFixed(3)) });
+        } else if (draggingClip.type === 'resize-start') {
+          // Shrink or expand left start of clip (adjusts sourceStart correspondingly)
+          const newStart = Math.max(
+            0,
+            Math.min(draggingClip.initialEnd - 0.1, draggingClip.initialStart + deltaSec)
+          );
+          const deltaSource = newStart - draggingClip.initialStart;
+          onUpdateClip(draggingClip.id, {
+            start: Number(newStart.toFixed(3)),
+            sourceStart: Number(Math.max(0, draggingClip.initialSourceStart + deltaSource).toFixed(3)),
+          });
+        }
       }
     };
 
     const handleMouseUp = () => {
       setDraggingZoom(null);
+      setDraggingClip(null);
     };
 
-    if (draggingZoom) {
+    if (draggingZoom || draggingClip) {
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
     }
@@ -122,7 +165,7 @@ export const Timeline: React.FC<TimelineProps> = React.memo(({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [draggingZoom, safeDuration, onUpdateZoom]);
+  }, [draggingZoom, draggingClip, safeDuration, onUpdateZoom, onUpdateClip]);
 
   // Generate ruler tick marks matching Image 1 & Image 2 (every 2s with minor ticks)
   const rulerTicks = useMemo(() => {
@@ -218,7 +261,7 @@ export const Timeline: React.FC<TimelineProps> = React.memo(({
             ))}
           </div>
 
-          {/* Video Clip Primary Track (Multiple Clips with Selection & Cuts) */}
+          {/* Video Clip Primary Track (Multiple Clips with Selection, Trim Handles & Cuts) */}
           <div className="h-7 rounded-md relative flex items-center my-0.5 select-none">
             {clips.map((clip) => {
               const clipDur = Math.max(0.1, clip.end - clip.start);
@@ -244,20 +287,62 @@ export const Timeline: React.FC<TimelineProps> = React.memo(({
                     }
                     onSelectZoom(null);
                   }}
-                  className={`absolute top-0 bottom-0 rounded-md border flex items-center px-2.5 transition-all cursor-pointer shadow-sm select-none ${
+                  className={`group absolute top-0 bottom-0 rounded-md border flex items-center justify-between px-2 transition-all cursor-pointer shadow-sm select-none ${
                     isClipSelected
-                      ? 'bg-[#164d2b] border-2 border-[#22c55e] ring-2 ring-emerald-500/80 shadow-[0_0_16px_rgba(34,197,94,0.6)] text-white z-20 font-semibold'
-                      : 'bg-[#0b2416] border border-[#144225] hover:border-[#22c55e]/60 text-[#4ade80] z-10 font-medium'
+                      ? 'bg-[#183a24] border-2 border-[#22c55e] ring-2 ring-emerald-500/80 shadow-[0_0_16px_rgba(34,197,94,0.5)] text-white z-20 font-semibold'
+                      : 'bg-[#0b2416] border border-[#144225] hover:border-[#22c55e]/70 text-[#4ade80] z-10 font-medium'
                   }`}
                   style={{
                     left: `${leftPct}%`,
                     width: `${widthPct}%`,
                   }}
-                  title={`Click to select clip (${clipDur.toFixed(2)}s) · Press S to cut`}
+                  title={`Clip: ${clipDur.toFixed(2)}s · Drag left/right handles to make smaller/trim · Press S to cut`}
                 >
-                  <span className="text-[11px] tracking-tight truncate select-none pointer-events-none">
-                    Clip {clipDur.toFixed(2)}s
+                  {/* Left Trim Handle: Drag to make clip smaller from the start */}
+                  <div
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      if (onSelectClip) onSelectClip(clip.id);
+                      setDraggingClip({
+                        id: clip.id,
+                        type: 'resize-start',
+                        initialX: e.clientX,
+                        initialStart: clip.start,
+                        initialEnd: clip.end,
+                        initialSourceStart: clip.sourceStart,
+                      });
+                    }}
+                    className="w-2.5 h-full absolute left-0 top-0 cursor-ew-resize hover:bg-emerald-400/50 rounded-l flex items-center justify-center z-30 transition-colors"
+                    title="Trim left edge to make clip smaller"
+                  >
+                    <div className="w-[1.5px] h-3 bg-white/60 rounded-full" />
+                  </div>
+
+                  {/* Center Content */}
+                  <span className="text-[11px] tracking-tight truncate select-none pointer-events-none mx-auto flex items-center gap-1.5">
+                    <Scissors className="w-3 h-3 opacity-70 shrink-0" />
+                    <span>Clip {clipDur.toFixed(2)}s</span>
                   </span>
+
+                  {/* Right Trim Handle: Drag to make clip smaller from the end */}
+                  <div
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      if (onSelectClip) onSelectClip(clip.id);
+                      setDraggingClip({
+                        id: clip.id,
+                        type: 'resize-end',
+                        initialX: e.clientX,
+                        initialStart: clip.start,
+                        initialEnd: clip.end,
+                        initialSourceStart: clip.sourceStart,
+                      });
+                    }}
+                    className="w-2.5 h-full absolute right-0 top-0 cursor-ew-resize hover:bg-emerald-400/50 rounded-r flex items-center justify-center z-30 transition-colors"
+                    title="Trim right edge to make clip smaller"
+                  >
+                    <div className="w-[1.5px] h-3 bg-white/60 rounded-full" />
+                  </div>
                 </div>
               );
             })}

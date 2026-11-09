@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Camera, Mic, Disc, X, Square, Pause, Play, Sparkles, Volume2 } from 'lucide-react';
+import { SleekCheckbox, SleekSwitch } from './SleekControls';
 import { TauriBridge } from '../utils/tauriBridge';
 import type { MouseEventRecord, ZoomKeyframe } from '../types/canvid';
 
@@ -364,7 +365,10 @@ export const RecorderModal: React.FC<RecorderModalProps> = ({
 
               {/* Toggles */}
               <div className="space-y-2.5">
-                <label className="flex items-center justify-between p-3 rounded-xl bg-zinc-950/70 border border-zinc-800 hover:border-zinc-700 cursor-pointer transition-colors">
+                <div
+                  onClick={() => setIncludeCam(!includeCam)}
+                  className="flex items-center justify-between p-3 rounded-xl bg-zinc-950/70 border border-zinc-800 hover:border-zinc-700 cursor-pointer transition-colors"
+                >
                   <div className="flex items-center gap-3">
                     <div className="p-2 rounded-lg bg-indigo-500/10 text-indigo-400">
                       <Camera className="w-4 h-4" />
@@ -374,15 +378,16 @@ export const RecorderModal: React.FC<RecorderModalProps> = ({
                       <span className="text-[10px] text-zinc-500 block">Records synchronized webcam video stream</span>
                     </div>
                   </div>
-                  <input
-                    type="checkbox"
+                  <SleekSwitch
                     checked={includeCam}
-                    onChange={(e) => setIncludeCam(e.target.checked)}
-                    className="w-4 h-4 rounded accent-indigo-600"
+                    onChange={(val) => setIncludeCam(val)}
                   />
-                </label>
+                </div>
 
-                <label className="flex items-center justify-between p-3 rounded-xl bg-zinc-950/70 border border-zinc-800 hover:border-zinc-700 cursor-pointer transition-colors">
+                <div
+                  onClick={() => setIncludeMic(!includeMic)}
+                  className="flex items-center justify-between p-3 rounded-xl bg-zinc-950/70 border border-zinc-800 hover:border-zinc-700 cursor-pointer transition-colors"
+                >
                   <div className="flex items-center gap-3">
                     <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400">
                       <Mic className="w-4 h-4" />
@@ -392,15 +397,16 @@ export const RecorderModal: React.FC<RecorderModalProps> = ({
                       <span className="text-[10px] text-zinc-500 block">Records commentary with volume gain controls</span>
                     </div>
                   </div>
-                  <input
-                    type="checkbox"
+                  <SleekSwitch
                     checked={includeMic}
-                    onChange={(e) => setIncludeMic(e.target.checked)}
-                    className="w-4 h-4 rounded accent-indigo-600"
+                    onChange={(val) => setIncludeMic(val)}
                   />
-                </label>
+                </div>
 
-                <label className="flex items-center justify-between p-3 rounded-xl bg-indigo-950/20 border border-indigo-500/30 hover:border-indigo-500/50 cursor-pointer transition-colors">
+                <div
+                  onClick={() => setSuppressOsCursor(!suppressOsCursor)}
+                  className="flex items-center justify-between p-3 rounded-xl bg-indigo-950/20 border border-indigo-500/30 hover:border-indigo-500/50 cursor-pointer transition-colors"
+                >
                   <div className="flex items-center gap-3">
                     <div className="p-2 rounded-lg bg-indigo-500/20 text-indigo-300">
                       <Sparkles className="w-4 h-4" />
@@ -414,13 +420,11 @@ export const RecorderModal: React.FC<RecorderModalProps> = ({
                       </span>
                     </div>
                   </div>
-                  <input
-                    type="checkbox"
+                  <SleekCheckbox
                     checked={suppressOsCursor}
-                    onChange={(e) => setSuppressOsCursor(e.target.checked)}
-                    className="w-4 h-4 rounded accent-indigo-600"
+                    onChange={(val) => setSuppressOsCursor(val)}
                   />
-                </label>
+                </div>
               </div>
 
               {/* Big Red Pulsing Start Recording Button */}

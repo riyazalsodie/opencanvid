@@ -292,6 +292,17 @@ export const App: React.FC = () => {
     handleUpdateZoom(selectedZoomId, updates);
   };
 
+  const handleUpdateClip = (clipId: string, updates: Partial<VideoClip>) => {
+    setProject((prev) => {
+      const clips = prev.clips || [];
+      const updated = clips.map((c) => (c.id === clipId ? { ...c, ...updates } : c));
+      return {
+        ...prev,
+        clips: updated,
+      };
+    });
+  };
+
   // Cut/split selected clip or current clip under playhead
   const handleCutClip = () => {
     const safeDur = project.duration > 0 ? project.duration : 12;
@@ -1045,6 +1056,7 @@ export const App: React.FC = () => {
               onAddZoom={handleAddZoom}
               onDeleteZoom={handleDeleteZoom}
               onUpdateZoom={handleUpdateZoom}
+              onUpdateClip={handleUpdateClip}
               onSetSpeed={handleSetSpeed}
               selectedZoomId={selectedZoomId}
               onSelectZoom={setSelectedZoomId}

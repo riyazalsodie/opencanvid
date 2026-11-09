@@ -19,6 +19,7 @@ import {
   Upload,
   Check,
 } from 'lucide-react';
+import { SleekCheckbox, SleekSwitch } from './SleekControls';
 import type { ProjectState, ZoomKeyframe } from '../types/canvid';
 import { CANVID_WALLPAPERS } from '../utils/wallpapers';
 import { WINDOWS_ARROW_DATA_URL, MACOS_ARROW_DATA_URL } from '../utils/cursorAssets';
@@ -720,21 +721,17 @@ export const Inspector: React.FC<InspectorProps> = React.memo(({
           {activeTab === 'cursor' && (
             <div className="flex flex-col gap-3.5">
               {/* Show Cursor Card */}
-              <div className="bg-[#121215] border border-zinc-800/80 rounded-2xl p-3.5 flex items-center justify-between shadow-sm">
-                <span className="font-semibold text-zinc-100 text-sm">Show Cursor</span>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={project.cursor.visible}
-                    onChange={(e) =>
-                      updateProject({
-                        cursor: { ...project.cursor, visible: e.target.checked },
-                      })
-                    }
-                    className="sr-only peer"
-                  />
-                  <div className="w-9 h-5 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
-                </label>
+              <div className="bg-[#121215] border border-zinc-800/80 rounded-2xl p-3.5 shadow-sm">
+                <SleekSwitch
+                  checked={project.cursor.visible}
+                  onChange={(checked) =>
+                    updateProject({
+                      cursor: { ...project.cursor, visible: checked },
+                    })
+                  }
+                  label="Show Cursor"
+                  description="Toggle mouse cursor visibility across viewport"
+                />
               </div>
 
               {/* Cursor Size Card */}
@@ -840,25 +837,16 @@ export const Inspector: React.FC<InspectorProps> = React.memo(({
               {/* Behavior & Effects Card */}
               <div className="bg-[#121215] border border-zinc-800/80 rounded-2xl p-3.5 flex flex-col gap-3 shadow-sm">
                 {/* Always use default cursor */}
-                <div className="flex items-center justify-between">
-                  <div className="flex flex-col pr-2">
-                    <span className="text-zinc-200 font-medium">Always use default cursor</span>
-                    <span className="text-[11px] text-zinc-500">Ignore recorded pointer roles.</span>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                    <input
-                      type="checkbox"
-                      checked={project.cursor.alwaysDefault ?? false}
-                      onChange={(e) =>
-                        updateProject({
-                          cursor: { ...project.cursor, alwaysDefault: e.target.checked },
-                        })
-                      }
-                      className="sr-only peer"
-                    />
-                    <div className="w-9 h-5 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
-                  </label>
-                </div>
+                <SleekCheckbox
+                  checked={project.cursor.alwaysDefault ?? false}
+                  onChange={(checked) =>
+                    updateProject({
+                      cursor: { ...project.cursor, alwaysDefault: checked },
+                    })
+                  }
+                  label="Always use default cursor"
+                  description="Ignore recorded pointer roles."
+                />
 
                 {/* Click Effect (None, Ripple) */}
                 <div className="flex flex-col gap-1.5 pt-2 border-t border-zinc-800/80">
@@ -888,39 +876,31 @@ export const Inspector: React.FC<InspectorProps> = React.memo(({
                 </div>
 
                 {/* Tilt cursor with movement */}
-                <div className="flex items-center justify-between pt-1">
-                  <span className="text-zinc-200 font-medium">Tilt cursor with movement</span>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={project.cursor.tilt}
-                      onChange={(e) =>
-                        updateProject({
-                          cursor: { ...project.cursor, tilt: e.target.checked },
-                        })
-                      }
-                      className="sr-only peer"
-                    />
-                    <div className="w-9 h-5 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
-                  </label>
+                <div className="pt-1 border-t border-zinc-800/60">
+                  <SleekCheckbox
+                    checked={project.cursor.tilt}
+                    onChange={(checked) =>
+                      updateProject({
+                        cursor: { ...project.cursor, tilt: checked },
+                      })
+                    }
+                    label="Tilt cursor with movement"
+                    description="Dynamically leans cursor based on trajectory vector"
+                  />
                 </div>
 
                 {/* Cursor movement smoothing */}
-                <div className="flex items-center justify-between pt-1">
-                  <span className="text-zinc-200 font-medium">Cursor movement smoothing</span>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={project.cursor.smoothing}
-                      onChange={(e) =>
-                        updateProject({
-                          cursor: { ...project.cursor, smoothing: e.target.checked },
-                        })
-                      }
-                      className="sr-only peer"
-                    />
-                    <div className="w-9 h-5 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
-                  </label>
+                <div className="pt-1 border-t border-zinc-800/60">
+                  <SleekCheckbox
+                    checked={project.cursor.smoothing}
+                    onChange={(checked) =>
+                      updateProject({
+                        cursor: { ...project.cursor, smoothing: checked },
+                      })
+                    }
+                    label="Cursor movement smoothing"
+                    description="Interpolates raw telemetry with sub-pixel spring physics"
+                  />
                 </div>
               </div>
 
@@ -1022,26 +1002,17 @@ export const Inspector: React.FC<InspectorProps> = React.memo(({
               {/* Motion Blur Card */}
               <div className="bg-[#121215] border border-zinc-800/80 rounded-2xl p-3.5 flex flex-col gap-2 shadow-sm">
                 <span className="font-semibold text-zinc-100 text-sm">Motion Blur</span>
-                <div className="flex items-center justify-between pt-1">
-                  <div className="flex flex-col pr-2">
-                    <span className="text-zinc-200 font-medium">Enable Motion Blur</span>
-                    <span className="text-[11px] text-zinc-500">
-                      Apply motion blur effect while mouse cursor or screen is moving
-                    </span>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                    <input
-                      type="checkbox"
-                      checked={project.cursor.motionBlur ?? true}
-                      onChange={(e) =>
-                        updateProject({
-                          cursor: { ...project.cursor, motionBlur: e.target.checked },
-                        })
-                      }
-                      className="sr-only peer"
-                    />
-                    <div className="w-9 h-5 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
-                  </label>
+                <div className="pt-1">
+                  <SleekCheckbox
+                    checked={project.cursor.motionBlur ?? true}
+                    onChange={(checked) =>
+                      updateProject({
+                        cursor: { ...project.cursor, motionBlur: checked },
+                      })
+                    }
+                    label="Enable Motion Blur"
+                    description="Optical linear shutter blur aligned with mouse velocity vector"
+                  />
                 </div>
               </div>
 
@@ -1158,19 +1129,16 @@ export const Inspector: React.FC<InspectorProps> = React.memo(({
                 Webcam Overlay
               </span>
 
-              <label className="flex items-center gap-2 cursor-pointer text-zinc-300">
-                <input
-                  type="checkbox"
-                  checked={project.webcam.enabled}
-                  onChange={(e) =>
-                    updateProject({
-                      webcam: { ...project.webcam, enabled: e.target.checked },
-                    })
-                  }
-                  className="rounded accent-blue-600"
-                />
-                <span>Show Webcam Bubble</span>
-              </label>
+              <SleekSwitch
+                checked={project.webcam.enabled}
+                onChange={(checked) =>
+                  updateProject({
+                    webcam: { ...project.webcam, enabled: checked },
+                  })
+                }
+                label="Show Webcam Bubble"
+                description="Displays floating camera PIP over video viewport"
+              />
 
               {/* Position */}
               <div className="flex flex-col gap-1.5">
@@ -1286,32 +1254,27 @@ export const Inspector: React.FC<InspectorProps> = React.memo(({
               <span className="font-semibold text-zinc-100 text-sm pb-1 border-b border-zinc-800">
                 Visibility & Overlays
               </span>
-              <div className="flex items-center justify-between">
-                <span className="text-zinc-300">Show Cursors</span>
-                <input
-                  type="checkbox"
-                  checked={project.cursor.visible}
-                  onChange={(e) =>
-                    updateProject({
-                      cursor: { ...project.cursor, visible: e.target.checked },
-                    })
-                  }
-                  className="rounded accent-blue-600"
-                />
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-zinc-300">Show Webcam</span>
-                <input
-                  type="checkbox"
-                  checked={project.webcam.enabled}
-                  onChange={(e) =>
-                    updateProject({
-                      webcam: { ...project.webcam, enabled: e.target.checked },
-                    })
-                  }
-                  className="rounded accent-blue-600"
-                />
-              </div>
+              <SleekCheckbox
+                checked={project.cursor.visible}
+                onChange={(checked) =>
+                  updateProject({
+                    cursor: { ...project.cursor, visible: checked },
+                  })
+                }
+                label="Show Cursors"
+                description="Toggle mouse pointer overlay"
+              />
+              <div className="h-[1px] bg-zinc-800/60" />
+              <SleekCheckbox
+                checked={project.webcam.enabled}
+                onChange={(checked) =>
+                  updateProject({
+                    webcam: { ...project.webcam, enabled: checked },
+                  })
+                }
+                label="Show Webcam"
+                description="Toggle camera picture-in-picture bubble"
+              />
             </div>
           )}
         </div>

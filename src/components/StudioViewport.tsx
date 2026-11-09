@@ -99,6 +99,28 @@ export const StudioViewport: React.FC<StudioViewportProps> = React.memo(({
       if (v) {
         if (!v.paused) {
           const ct = v.currentTime;
+
+          // Seamless clip-skipping: if user trimmed or cut clips, skip cut gaps automatically
+          if (project.clips && project.clips.length > 0) {
+            const activeClip = project.clips.find((c) => ct >= c.start && ct < c.end);
+            if (!activeClip) {
+              const nextClip = project.clips.find((c) => c.start > ct);
+              if (nextClip) {
+                v.currentTime = nextClip.start;
+                setPlaybackTime(nextClip.start);
+                onTimeUpdate(nextClip.start);
+                animId = requestAnimationFrame(tick);
+                return;
+              } else {
+                v.pause();
+                setPlaybackTime(safeDuration);
+                onTimeUpdate(safeDuration);
+                animId = requestAnimationFrame(tick);
+                return;
+              }
+            }
+          }
+
           setPlaybackTime(ct);
 
           if (Math.abs(ct - lastThrottledTime) >= 0.1) {
@@ -112,7 +134,7 @@ export const StudioViewport: React.FC<StudioViewportProps> = React.memo(({
 
     animId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(animId);
-  }, [videoRef, onTimeUpdate]);
+  }, [videoRef, onTimeUpdate, project.clips, safeDuration]);
 
   const effectiveTime = project.isPlaying ? playbackTime : project.currentTime;
 
