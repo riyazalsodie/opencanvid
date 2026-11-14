@@ -536,35 +536,8 @@ export async function exportFinalEditedVideo(
       ctx.translate((zoom.transX / 100) * innerW, (zoom.transY / 100) * innerH);
       ctx.translate(-innerW / 2, -innerH / 2);
 
-      // C. 1. Draw Video Frame with object-fit: contain
+      // C. 1. Draw Video Frame with object-fit: contain at 100% crisp native resolution
       drawImageContain(ctx, video, videoOrigW, videoOrigH, 0, 0, innerW, innerH);
-
-      // Blend optical camera motion blur sub-frames inside clipped container before crisp overlays
-      if (project.zoomConfig?.motionBlur !== false && zoom.motionBlurPx > 0.35) {
-        const subSamples = [
-          { dt: -0.006, alpha: 0.24 },
-          { dt: -0.012, alpha: 0.14 },
-        ];
-        for (const sub of subSamples) {
-          const sLevel = Math.max(1.0, zoom.level + zoom.vLevel * sub.dt);
-          const sMax = 50 * (1 - 1 / sLevel);
-          const sTransX = Math.max(-sMax, Math.min(sMax, zoom.transX + zoom.vTransX * sub.dt));
-          const sTransY = Math.max(-sMax, Math.min(sMax, zoom.transY + zoom.vTransY * sub.dt));
-
-          ctx.save();
-          // Undo current camera matrix so sub-sample applies independently inside clip
-          ctx.setTransform(1, 0, 0, 1, 0, 0);
-          ctx.globalAlpha = sub.alpha;
-          ctx.imageSmoothingEnabled = true;
-          ctx.imageSmoothingQuality = 'high';
-          ctx.translate(originX, originY);
-          ctx.scale(sLevel, sLevel);
-          ctx.translate((sTransX / 100) * innerW, (sTransY / 100) * innerH);
-          ctx.translate(-innerW / 2, -innerH / 2);
-          drawImageContain(ctx, video, videoOrigW, videoOrigH, 0, 0, innerW, innerH);
-          ctx.restore();
-        }
-      }
 
       // C. 2. Draw Real Screen Ripples & Vector Cursor inside Same Camera Space
       if (project.cursor.visible && sampled) {

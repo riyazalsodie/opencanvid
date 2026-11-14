@@ -98,9 +98,6 @@ export const CustomCursor: React.FC<CustomCursorProps> = React.memo(({
                   height: `${d1.toFixed(1)}px`,
                   background: `radial-gradient(circle, rgba(255,255,255,0) 56%, rgba(255,255,255,${(a1 * 0.22).toFixed(3)}) 78%, rgba(255,255,255,${(a1 * 0.68).toFixed(3)}) 92%, rgba(0,0,0,${(a1 * 0.24).toFixed(3)}) 100%)`,
                   boxShadow: `0 0 0 1px rgba(255,255,255,${(a1 * 0.78).toFixed(3)}), 0 0 10px rgba(255,255,255,${(a1 * 0.25).toFixed(3)}), inset 0 0 0 1px rgba(0,0,0,${(a1 * 0.18).toFixed(3)})`,
-                  backdropFilter: rp.rawProgress < 0.85 ? 'brightness(1.12) contrast(1.06)' : 'none',
-                  WebkitMaskImage: 'radial-gradient(circle, transparent 58%, black 80%, transparent 100%)',
-                  maskImage: 'radial-gradient(circle, transparent 58%, black 80%, transparent 100%)',
                 }}
               />
 

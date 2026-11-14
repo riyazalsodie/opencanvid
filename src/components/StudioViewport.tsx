@@ -178,23 +178,16 @@ export const StudioViewport: React.FC<StudioViewportProps> = React.memo(({
       videoDims.height
     );
 
-    const blurFilter =
-      project.zoomConfig?.motionBlur !== false && cam.motionBlurPx > 0.35
-        ? `blur(${Math.min(4.5, cam.motionBlurPx * 0.42).toFixed(2)}px)`
-        : undefined;
-
     if (cam.level <= 1.0005 && Math.abs(cam.transX) < 0.01 && Math.abs(cam.transY) < 0.01) {
       return {
         transform: 'scale(1) translate(0%, 0%)',
         transformOrigin: '50% 50%',
-        filter: blurFilter,
       };
     }
 
     return {
       transform: `scale(${cam.level.toFixed(4)}) translate(${cam.transX.toFixed(3)}%, ${cam.transY.toFixed(3)}%)`,
       transformOrigin: '50% 50%',
-      filter: blurFilter,
     };
   }, [effectiveTime, project.zooms, recordedMouseFocal, project.zoomConfig, project.mouseEvents, videoDims.width, videoDims.height]);
 
@@ -323,20 +316,19 @@ export const StudioViewport: React.FC<StudioViewportProps> = React.memo(({
             }}
           />
 
-          {/* Video Canvas Container - Hardware GPU Scaled Padding */}
+          {/* Video Canvas Container - Scaled Padding without Chromium Pre-Zoom Texture Caching */}
           <div
             ref={videoContainerRef}
-            className="relative overflow-hidden flex items-center justify-center z-10 will-change-transform"
+            className="relative overflow-hidden flex items-center justify-center z-10"
             style={{
               width: '100%',
               height: '100%',
-              transform: `scale(${Math.max(0.4, 1 - (project.padding / 100) * 1.4).toFixed(4)}) translateZ(0)`,
+              transform: `scale(${Math.max(0.4, 1 - (project.padding / 100) * 1.4).toFixed(4)})`,
               transformOrigin: '50% 50%',
               borderRadius: `var(--canvid-radius, ${project.radius}px)`,
               boxShadow: project.shadowEnabled
                 ? `0 calc(var(--canvid-shadow-blur, ${project.shadowBlur}px) / 2) var(--canvid-shadow-blur, ${project.shadowBlur}px) rgba(0,0,0,0.6)`
                 : 'none',
-              willChange: 'transform, border-radius, box-shadow',
             }}
           >
             {/* Main Video Element with Dynamic Camera Pan & Zoom Transform */}

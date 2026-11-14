@@ -484,10 +484,7 @@ export function computeCameraZoom(
   const finalTransX = Math.max(-maxOffset, Math.min(maxOffset, transX));
   const finalTransY = Math.max(-maxOffset, Math.min(maxOffset, transY));
 
-  const motionBlurPx =
-    zoomConfig?.motionBlur !== false
-      ? Math.min(10, Math.max(0, Math.abs(vLevel) * 4.2 + Math.hypot(vTransX, vTransY) * 0.085))
-      : 0;
+  const motionBlurPx = 0;
 
   return {
     level: finalLevel,
