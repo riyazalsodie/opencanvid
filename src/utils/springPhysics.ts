@@ -116,14 +116,14 @@ function lookupMouseAtTime(
   useCatmullRom: boolean,
   screenWidth: number,
   screenHeight: number
-): { x: number; y: number; vx: number; vy: number; idx: number } {
+): { x: number; y: number; vx: number; vy: number; idx: number; cursor: 'arrow' | 'hand' | 'ibeam' } {
   if (!events || events.length === 0) {
     const t = (curMs / 1000) * 0.85;
     const x = screenWidth * 0.5 + Math.sin(t) * (screenWidth * 0.32);
     const y = screenHeight * 0.5 + Math.sin(t * 1.7) * (screenHeight * 0.24);
     const velX = Math.cos(t) * 20;
     const velY = Math.cos(t * 1.7) * 16;
-    return { x, y, vx: velX, vy: velY, idx: 0 };
+    return { x, y, vx: velX, vy: velY, idx: 0, cursor: 'arrow' };
   }
 
   const len = events.length;
@@ -185,7 +185,8 @@ function lookupMouseAtTime(
     }
   }
 
-  return { x, y, vx, vy, idx };
+  const cursorRole = (p1 && curMs < p2.t_ms ? p1.cursor : p2.cursor) || 'arrow';
+  return { x, y, vx, vy, idx, cursor: cursorRole };
 }
 
 /**
@@ -197,7 +198,7 @@ function sampleSpringPosition(
   cursorConfig: CursorConfig,
   screenWidth: number,
   screenHeight: number
-): { x: number; y: number; vx: number; vy: number; speed: number; idx: number } {
+): { x: number; y: number; vx: number; vy: number; speed: number; idx: number; cursor: 'arrow' | 'hand' | 'ibeam' } {
   const smoothing = cursorConfig.smoothing !== false;
 
   if (!smoothing || !events || events.length === 0) {
@@ -209,6 +210,7 @@ function sampleSpringPosition(
       vy: raw.vy,
       speed: Math.sqrt(raw.vx * raw.vx + raw.vy * raw.vy),
       idx: raw.idx,
+      cursor: raw.cursor,
     };
   }
 
@@ -261,6 +263,7 @@ function sampleSpringPosition(
     vy: frameVy,
     speed,
     idx: endRaw.idx,
+    cursor: endRaw.cursor,
   };
 }
 
@@ -358,7 +361,7 @@ export function sampleCursorState(
     }
   }
 
-  const showHand = isClicking && !cursorConfig.alwaysDefault;
+  const showHand = !cursorConfig.alwaysDefault && (pos.cursor === 'hand' || pos.cursor === 'ibeam');
   const tiltDeg = cursorConfig.tilt ? Math.max(-16, Math.min(16, pos.vx * 0.38)) : 0;
 
   return {

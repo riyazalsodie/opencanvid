@@ -3,6 +3,7 @@ export interface MouseEventRecord {
   x: number;
   y: number;
   event_type: 'move' | 'lclick' | 'rclick' | 'wheel';
+  cursor?: 'arrow' | 'hand' | 'ibeam';
 }
 
 export interface ZoomKeyframe {
