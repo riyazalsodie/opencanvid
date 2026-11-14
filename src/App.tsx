@@ -39,7 +39,7 @@ const INITIAL_PROJECT: ProjectState = {
   },
   cursor: {
     visible: true,
-    scale: 1.4,
+    scale: 1.0,
     theme: 'windows',
     clickEffect: 'ripple',
     smoothing: true,

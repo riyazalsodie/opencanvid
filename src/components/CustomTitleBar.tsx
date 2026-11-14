@@ -4,8 +4,6 @@ import {
   Minus,
   Square,
   X,
-  Sparkles,
-  CheckCircle,
   ExternalLink,
   ChevronRight,
 } from 'lucide-react';
@@ -250,21 +248,10 @@ export const CustomTitleBar: React.FC<CustomTitleBarProps> = React.memo(({
         </span>
       </div>
 
-      {/* Right: Upgrade Badge + Checkmark + Window Controls + CANVI▷ Logo (Matching Image 2) */}
-      <div className="flex items-center gap-2.5" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-        {/* Upgrade Pill Badge (Image 2) */}
-        <div className="bg-[#2a1d06] text-amber-400 border border-amber-600/40 px-2.5 py-0.5 rounded-full font-medium flex items-center gap-1 text-[11px] cursor-pointer hover:bg-amber-500/20 transition-colors">
-          <Sparkles className="w-2.5 h-2.5 text-amber-400" />
-          <span>Upgrade</span>
-        </div>
-
-        {/* Checkmark in circle icon (Image 2) */}
-        <button className="text-zinc-400 hover:text-zinc-200 p-1 transition-colors" title="License Active">
-          <CheckCircle className="w-3.5 h-3.5" />
-        </button>
-
+      {/* Right: Window Control Buttons */}
+      <div className="flex items-center" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
         {/* Window Control Buttons (Minimize, Maximize, Close) */}
-        <div className="flex items-center ml-1 border-l border-zinc-800/80 pl-2">
+        <div className="flex items-center">
           {/* Minimize */}
           <button
             onClick={() => TauriBridge.minimizeWindow()}
@@ -291,12 +278,6 @@ export const CustomTitleBar: React.FC<CustomTitleBarProps> = React.memo(({
           >
             <X className="w-3.5 h-3.5" />
           </button>
-        </div>
-
-        {/* CANVI▷ Brand Logo at far right (Matching Image 2) */}
-        <div className="flex items-center gap-0.5 font-bold tracking-wider text-sm select-none pl-2 border-l border-zinc-800/80">
-          <span className="text-white font-extrabold tracking-wide">CANVI</span>
-          <span className="text-indigo-400 font-black text-base">▷</span>
         </div>
       </div>
     </header>

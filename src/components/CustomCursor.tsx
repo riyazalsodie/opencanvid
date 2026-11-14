@@ -6,6 +6,7 @@ import {
   MACOS_ARROW_DATA_URL,
   MACOS_LINK_DATA_URL,
 } from '../utils/cursorAssets';
+import { sampleCursorState } from '../utils/springPhysics';
 
 interface CustomCursorProps {
   cursorConfig: CursorConfig;
@@ -22,203 +23,165 @@ export const CustomCursor: React.FC<CustomCursorProps> = React.memo(({
   screenWidth = 1920,
   screenHeight = 1080,
 }) => {
-  if (!cursorConfig.visible) return null;
+  const sampled = useMemo(() => {
+    if (!cursorConfig.visible) return null;
+    return sampleCursorState(mouseEvents, currentTimeMs, cursorConfig, screenWidth, screenHeight);
+  }, [mouseEvents, currentTimeMs, cursorConfig, screenWidth, screenHeight]);
 
-  // Binary search for coordinate lookup & velocity determination
-  const { currentPos, speed, vx, vy, isClicking } = useMemo(() => {
-    if (mouseEvents.length === 0) {
-      const t = (currentTimeMs / 1000) * 0.85;
-      const x = (screenWidth * 0.5) + Math.sin(t) * (screenWidth * 0.32);
-      const y = (screenHeight * 0.5) + Math.sin(t * 1.7) * (screenHeight * 0.24);
-      const velX = Math.cos(t) * 20;
-      const velY = Math.cos(t * 1.7) * 16;
-      const curSpeed = Math.sqrt(velX * velX + velY * velY);
-      return {
-        currentPos: { x, y },
-        speed: curSpeed,
-        vx: velX,
-        vy: velY,
-        isClicking: false,
-      };
-    }
+  if (!cursorConfig.visible || !sampled) return null;
 
-    let low = 0;
-    let high = mouseEvents.length - 1;
+  const leftPercent = (sampled.x / screenWidth) * 100;
+  const topPercent = (sampled.y / screenHeight) * 100;
+  const scaleFactor = cursorConfig.scale ?? 1.0;
+  const baseSize = 12 * scaleFactor;
+  const maxRippleDiameter = Math.max(32, 48 * scaleFactor);
 
-    while (low <= high) {
-      const mid = Math.floor((low + high) / 2);
-      if (mouseEvents[mid].t_ms < currentTimeMs) {
-        low = mid + 1;
-      } else {
-        high = mid - 1;
-      }
-    }
-
-    const idx = Math.max(0, Math.min(mouseEvents.length - 1, low));
-    const p0 = mouseEvents[Math.max(0, idx - 2)];
-    const p1 = mouseEvents[Math.max(0, idx - 1)];
-    const p2 = mouseEvents[idx];
-    const p3 = mouseEvents[Math.min(mouseEvents.length - 1, idx + 1)];
-
-    let x = p2.x;
-    let y = p2.y;
-    let velX = 0;
-    let velY = 0;
-
-    if (p1 && p2 && p2.t_ms > p1.t_ms) {
-      const dt = Math.max(1, p2.t_ms - p1.t_ms);
-      velX = ((p2.x - p1.x) / dt) * 16.6;
-      velY = ((p2.y - p1.y) / dt) * 16.6;
-
-      if (cursorConfig.smoothing) {
-        const t = Math.max(0, Math.min(1, (currentTimeMs - p1.t_ms) / (p2.t_ms - p1.t_ms)));
-        const t2 = t * t;
-        const t3 = t2 * t;
-
-        x = 0.5 * (
-          (2 * p1.x) +
-          (-p0.x + p2.x) * t +
-          (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
-          (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3
-        );
-
-        y = 0.5 * (
-          (2 * p1.y) +
-          (-p0.y + p2.y) * t +
-          (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
-          (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3
-        );
-      }
-    }
-
-    const curSpeed = Math.sqrt(velX * velX + velY * velY);
-
-    // Click detection: activates hand pointer in a ±220ms window around click events
-    let isClick = false;
-    const windowStart = Math.max(0, idx - 12);
-    const windowEnd = Math.min(mouseEvents.length - 1, idx + 12);
-    for (let i = windowStart; i <= windowEnd; i++) {
-      const ev = mouseEvents[i];
-      if (ev.event_type === 'lclick' || ev.event_type === 'rclick') {
-        const delta = currentTimeMs - ev.t_ms;
-        if (delta >= -40 && delta <= 240) {
-          isClick = true;
-          break;
-        }
-      }
-    }
-
-    return {
-      currentPos: { x, y },
-      speed: curSpeed,
-      vx: velX,
-      vy: velY,
-      isClicking: isClick,
-    };
-  }, [mouseEvents, currentTimeMs, cursorConfig.smoothing, screenWidth, screenHeight]);
-
-  const leftPercent = (currentPos.x / screenWidth) * 100;
-  const topPercent = (currentPos.y / screenHeight) * 100;
-  const baseSize = 22 * (cursorConfig.scale || 1.4);
-
-  // Real Directional Linear Motion Blur (True camera shutter smear matching Canvid, ZERO ghosting duplicates)
-  const isMotionBlur = cursorConfig.motionBlur !== false && speed > 2.0 && !isClicking;
-  const blurAmount = isMotionBlur ? Math.min(10.0, Math.max(0, (speed - 2.0) * 0.16)) : 0;
-  const angleRad = isMotionBlur ? Math.atan2(vy, vx) : 0;
+  // Real Directional Linear Motion Blur aligned along spring trajectory velocity
+  const isMotionBlur = cursorConfig.motionBlur !== false && sampled.speed > 2.0 && !sampled.isClicking;
+  const blurAmount = isMotionBlur ? Math.min(10.0, Math.max(0, (sampled.speed - 2.0) * 0.16)) : 0;
+  const angleRad = isMotionBlur ? Math.atan2(sampled.vy, sampled.vx) : 0;
   const angleDeg = (angleRad * 180) / Math.PI;
 
   // Slight trailing bias along direction of motion for realistic camera shutter exposure
-  const trailBiasX = isMotionBlur && speed > 0 ? -(vx / speed) * (blurAmount * 0.45) : 0;
-  const trailBiasY = isMotionBlur && speed > 0 ? -(vy / speed) * (blurAmount * 0.45) : 0;
+  const trailBiasX = isMotionBlur && sampled.speed > 0 ? -(sampled.vx / sampled.speed) * (blurAmount * 0.45) : 0;
+  const trailBiasY = isMotionBlur && sampled.speed > 0 ? -(sampled.vy / sampled.speed) * (blurAmount * 0.45) : 0;
 
-  // Precise Hotspot Alignment:
-  // Windows Arrow hotspot is (0, 0) -> translate(0, 0)
-  // Windows Link Hand fingertip is (25px / 70px) = 35.71% -> translate(-35.71%, 0)
-  // macOS Arrow hotspot is (13px / 76px) = 17.11%, (11px / 113px) = 9.73% -> translate(-17.11%, -9.73%)
-  // macOS Link Hand fingertip is (36px / 106px) = 33.96%, (13px / 112px) = 11.61% -> translate(-33.96%, -11.61%)
+  // Hotspot alignment (translates cursor image so tip/fingertip sits at exact 0,0 hotspot)
   const theme = cursorConfig.theme || 'windows';
   const isWindows = theme === 'windows';
   const isMac = theme === 'mac';
 
-  let cursorTransform = 'translate(0%, 0%)';
-  if (isClicking) {
+  let hotspotTranslate = 'translate(0%, 0%)';
+  if (sampled.showHand) {
     if (isWindows) {
-      cursorTransform = 'translate(-35.71%, 0%) scale(0.96)';
+      hotspotTranslate = 'translate(-35.71%, 0%)';
     } else if (isMac) {
-      cursorTransform = 'translate(-33.96%, -11.61%) scale(0.96)';
+      hotspotTranslate = 'translate(-33.96%, -11.61%)';
+    } else if (theme === 'touch') {
+      hotspotTranslate = 'translate(0%, 0%)';
     } else {
-      cursorTransform = 'translate(-35.4%, -6.25%) scale(0.96)';
+      hotspotTranslate = 'translate(-35.4%, -6.25%)';
     }
   } else {
     if (isWindows) {
-      cursorTransform = 'translate(0%, 0%)';
+      hotspotTranslate = 'translate(0%, 0%)';
     } else if (isMac) {
-      cursorTransform = 'translate(-17.11%, -9.73%)';
+      hotspotTranslate = 'translate(-17.11%, -9.73%)';
+    } else if (theme === 'touch') {
+      hotspotTranslate = 'translate(0%, 0%)';
     } else {
-      cursorTransform = 'translate(-3px, -3px)';
+      hotspotTranslate = 'translate(-3px, -3px)';
     }
   }
 
   return (
     <div className="absolute inset-0 pointer-events-none overflow-hidden z-40">
+      {/* Real Screen Click Ripple Waves (Pinned at exact click coordinates on screen) */}
+      {cursorConfig.clickEffect === 'ripple' &&
+        sampled.activeRipples.map((rp) => {
+          const rxPct = (rp.x / screenWidth) * 100;
+          const ryPct = (rp.y / screenHeight) * 100;
+          const d1 = 8 + rp.progress * maxRippleDiameter;
+          const a1 = Math.pow(Math.max(0, 1 - rp.rawProgress), 1.5);
+          const d2 = 6 + rp.secondaryProgress * (maxRippleDiameter * 0.72);
+          const a2 = Math.pow(Math.max(0, 1 - rp.secondaryProgress), 1.6) * 0.65;
+
+          return (
+            <React.Fragment key={rp.id}>
+              {/* Outer Refractive Water-Wave Crest */}
+              <div
+                className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full pointer-events-none"
+                style={{
+                  left: `${rxPct}%`,
+                  top: `${ryPct}%`,
+                  width: `${d1.toFixed(1)}px`,
+                  height: `${d1.toFixed(1)}px`,
+                  background: `radial-gradient(circle, rgba(255,255,255,0) 56%, rgba(255,255,255,${(a1 * 0.22).toFixed(3)}) 78%, rgba(255,255,255,${(a1 * 0.68).toFixed(3)}) 92%, rgba(0,0,0,${(a1 * 0.24).toFixed(3)}) 100%)`,
+                  boxShadow: `0 0 0 1px rgba(255,255,255,${(a1 * 0.78).toFixed(3)}), 0 0 10px rgba(255,255,255,${(a1 * 0.25).toFixed(3)}), inset 0 0 0 1px rgba(0,0,0,${(a1 * 0.18).toFixed(3)})`,
+                  backdropFilter: rp.rawProgress < 0.85 ? 'brightness(1.12) contrast(1.06)' : 'none',
+                  WebkitMaskImage: 'radial-gradient(circle, transparent 58%, black 80%, transparent 100%)',
+                  maskImage: 'radial-gradient(circle, transparent 58%, black 80%, transparent 100%)',
+                }}
+              />
+
+              {/* Secondary Trailing Wave Crest */}
+              {rp.secondaryProgress > 0 && (
+                <div
+                  className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full pointer-events-none"
+                  style={{
+                    left: `${rxPct}%`,
+                    top: `${ryPct}%`,
+                    width: `${d2.toFixed(1)}px`,
+                    height: `${d2.toFixed(1)}px`,
+                    boxShadow: `0 0 0 1px rgba(255,255,255,${(a2 * 0.65).toFixed(3)}), inset 0 0 0 0.75px rgba(0,0,0,${(a2 * 0.16).toFixed(3)})`,
+                  }}
+                />
+              )}
+
+              {/* Initial Impact Specular Glint */}
+              {rp.rawProgress < 0.28 && (
+                <div
+                  className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full pointer-events-none"
+                  style={{
+                    left: `${rxPct}%`,
+                    top: `${ryPct}%`,
+                    width: `${(8 + rp.rawProgress * 28 * scaleFactor).toFixed(1)}px`,
+                    height: `${(8 + rp.rawProgress * 28 * scaleFactor).toFixed(1)}px`,
+                    background: `radial-gradient(circle, rgba(255,255,255,${((1 - rp.rawProgress / 0.28) * 0.45).toFixed(3)}) 0%, rgba(255,255,255,0) 72%)`,
+                  }}
+                />
+              )}
+            </React.Fragment>
+          );
+        })}
+
       {/* SVG Directional Motion Blur Filter Definition */}
       {isMotionBlur && blurAmount > 0.4 && (
         <svg className="absolute w-0 h-0 pointer-events-none overflow-hidden" aria-hidden="true">
           <defs>
             <filter id="cursor-dir-motion-blur" x="-200%" y="-200%" width="500%" height="500%">
-              {/* Pure 1-Dimensional Linear Blur strictly along local X-axis */}
               <feGaussianBlur in="SourceGraphic" stdDeviation={`${blurAmount.toFixed(2)} 0`} />
             </filter>
           </defs>
         </svg>
       )}
 
-      {/* Main Single Cursor Element with Real Directional Linear Motion Blur */}
+      {/* Main Single Cursor Element positioned at exact hotspot */}
       <div
         className="absolute pointer-events-none will-change-transform"
         style={{
           left: `${leftPercent}%`,
           top: `${topPercent}%`,
-          transform: `${cursorTransform} translate(${trailBiasX}px, ${trailBiasY}px)`,
-          transition: 'transform 75ms cubic-bezier(0.16, 1, 0.3, 1)',
+          transformOrigin: '0% 0%',
+          transform: `translate(${trailBiasX.toFixed(2)}px, ${trailBiasY.toFixed(2)}px) scale(${sampled.clickScale.toFixed(4)}) rotate(${sampled.tiltDeg.toFixed(2)}deg)`,
         }}
       >
-        {/* Click Expanding Ripple Animation if enabled */}
-        {isClicking && cursorConfig.clickEffect !== 'none' && (
-          <div
-            className={`absolute rounded-full -translate-x-1/2 -translate-y-1/2 pointer-events-none animate-ping ${
-              cursorConfig.clickEffect === 'glow'
-                ? 'w-10 h-10 bg-indigo-500/35 blur-xs'
-                : cursorConfig.clickEffect === 'radar'
-                ? 'w-12 h-12 border border-emerald-400/80'
-                : 'w-10 h-10 border border-indigo-400/80 bg-indigo-500/20'
-            }`}
-            style={{
-              left: isClicking ? (isMac ? '34%' : '36%') : (isMac ? '17%' : '0'),
-              top: isClicking ? (isMac ? '12%' : '4%') : (isMac ? '10%' : '0'),
-            }}
-          />
-        )}
-
-        {/* Directional Blur Rotator: Aligns 1D blur strictly along motion vector while keeping cursor upright */}
         <div
-          className="pointer-events-none will-change-transform"
+          className="pointer-events-none"
           style={{
-            transform: isMotionBlur && blurAmount > 0.4 ? `rotate(${angleDeg.toFixed(2)}deg)` : 'none',
-            filter: isMotionBlur && blurAmount > 0.4 ? 'url(#cursor-dir-motion-blur)' : 'none',
+            transform: hotspotTranslate,
           }}
         >
+          {/* Directional Blur Rotator: Aligns 1D blur strictly along motion vector while keeping cursor upright */}
           <div
             className="pointer-events-none will-change-transform"
             style={{
-              transform: isMotionBlur && blurAmount > 0.4 ? `rotate(${-angleDeg.toFixed(2)}deg)` : 'none',
+              transform: isMotionBlur && blurAmount > 0.4 ? `rotate(${angleDeg.toFixed(2)}deg)` : 'none',
+              filter: isMotionBlur && blurAmount > 0.4 ? 'url(#cursor-dir-motion-blur)' : 'none',
             }}
           >
-            {isClicking ? (
-              <HandCursorSvg theme={cursorConfig.theme} size={baseSize} />
-            ) : (
-              <CursorSvg theme={cursorConfig.theme} size={baseSize} />
-            )}
+            <div
+              className="pointer-events-none will-change-transform"
+              style={{
+                transform: isMotionBlur && blurAmount > 0.4 ? `rotate(${-angleDeg.toFixed(2)}deg)` : 'none',
+              }}
+            >
+              {sampled.showHand ? (
+                <HandCursorSvg theme={cursorConfig.theme} size={baseSize} />
+              ) : (
+                <CursorSvg theme={cursorConfig.theme} size={baseSize} />
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -262,12 +225,17 @@ export const CursorSvg: React.FC<{ theme?: string; size: number }> = ({ theme = 
 
   // Touch Pointer: Translucent clean circle
   if (theme === 'touch') {
+    const outer = size * 0.95;
+    const inner = Math.max(2, outer * 0.36);
     return (
       <div
         className="rounded-full bg-white/85 border border-white shadow-[0_2px_8px_rgba(0,0,0,0.4)] flex items-center justify-center -translate-x-1/2 -translate-y-1/2"
-        style={{ width: `${size * 0.9}px`, height: `${size * 0.9}px` }}
+        style={{ width: `${outer}px`, height: `${outer}px` }}
       >
-        <div className="w-2.5 h-2.5 rounded-full bg-zinc-900" />
+        <div
+          className="rounded-full bg-zinc-900"
+          style={{ width: `${inner}px`, height: `${inner}px` }}
+        />
       </div>
     );
   }
@@ -343,14 +311,19 @@ export const HandCursorSvg: React.FC<{ theme?: string; size: number }> = ({ them
     );
   }
 
-  // Touch Theme: Pressed Dot with pulse
+  // Touch Theme: Pressed Dot
   if (theme === 'touch') {
+    const outer = size * 0.95;
+    const inner = Math.max(2, outer * 0.44);
     return (
       <div
-        className="rounded-full bg-white border-2 border-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.6)] flex items-center justify-center -translate-x-1/2 -translate-y-1/2 scale-90"
-        style={{ width: `${size * 0.95}px`, height: `${size * 0.95}px` }}
+        className="rounded-full bg-white border border-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.6)] flex items-center justify-center -translate-x-1/2 -translate-y-1/2"
+        style={{ width: `${outer}px`, height: `${outer}px` }}
       >
-        <div className="w-3.5 h-3.5 rounded-full bg-blue-500" />
+        <div
+          className="rounded-full bg-blue-500"
+          style={{ width: `${inner}px`, height: `${inner}px` }}
+        />
       </div>
     );
   }

@@ -31,9 +31,9 @@ export interface WebcamConfig {
 
 export interface CursorConfig {
   visible: boolean;
-  scale: number; // 1 to 4 (default 1.4)
+  scale: number; // 0.35 to 2.5 (default 1.0)
   theme: 'windows' | 'mac' | 'touch' | 'recorded' | 'neon' | 'dot';
-  clickEffect: 'ripple' | 'glow' | 'radar' | 'none';
+  clickEffect: 'none' | 'ripple';
   smoothing: boolean;
   tilt: boolean;
   motionBlur: boolean;

@@ -9,7 +9,6 @@ import {
   Play,
   Pause,
   Crop,
-  PanelLeft,
   Scissors,
   ZoomIn,
   ZoomOut,
@@ -19,6 +18,7 @@ import {
 import type { ProjectState } from '../types/canvid';
 import { CustomCursor } from './CustomCursor';
 import { QuickShareSettingsModal } from './QuickShareSettingsModal';
+import { computeCameraZoom, sampleCursorState } from '../utils/springPhysics';
 
 interface StudioViewportProps {
   project: ProjectState;
@@ -144,73 +144,44 @@ export const StudioViewport: React.FC<StudioViewportProps> = React.memo(({
 
   const effectiveTime = project.isPlaying ? playbackTime : project.currentTime;
 
-  // Active recorded mouse position at the current millisecond (for auto camera tracking)
+  // Active spring-filtered mouse position at the current millisecond (for auto camera tracking)
   const recordedMouseFocal = useMemo(() => {
     if (project.mouseEvents.length === 0 || videoDims.width <= 0 || videoDims.height <= 0) return null;
     const curMs = effectiveTime * 1000;
-    let low = 0;
-    let high = project.mouseEvents.length - 1;
-    while (low <= high) {
-      const mid = Math.floor((low + high) / 2);
-      if (project.mouseEvents[mid].t_ms < curMs) {
-        low = mid + 1;
-      } else {
-        high = mid - 1;
-      }
-    }
-    const idx = Math.max(0, Math.min(project.mouseEvents.length - 1, low));
-    const p = project.mouseEvents[idx];
-    if (!p) return null;
-    return {
-      x: Math.max(0.05, Math.min(0.95, p.x / videoDims.width)),
-      y: Math.max(0.05, Math.min(0.95, p.y / videoDims.height)),
-      isClick: Math.abs(p.t_ms - curMs) < 300 && (p.event_type === 'lclick' || p.event_type === 'rclick'),
-    };
-  }, [project.mouseEvents, effectiveTime, videoDims]);
-
-  // Determine current active timeline zoom keyframe
-  const timelineZoom = useMemo(() => {
-    const curMs = effectiveTime * 1000;
-    return project.zooms.find(
-      (z) => !z.disabled && curMs >= z.start && curMs <= z.end
+    const sampled = sampleCursorState(
+      project.mouseEvents,
+      curMs,
+      project.cursor,
+      videoDims.width,
+      videoDims.height
     );
-  }, [project.zooms, effectiveTime]);
+    return {
+      x: Math.max(0.05, Math.min(0.95, sampled.x / videoDims.width)),
+      y: Math.max(0.05, Math.min(0.95, sampled.y / videoDims.height)),
+      isClick: sampled.isClicking,
+    };
+  }, [project.mouseEvents, effectiveTime, project.cursor, videoDims]);
 
-  const isZoomActive = Boolean(timelineZoom);
-  const currentZoomLevel = timelineZoom ? timelineZoom.level : 1.0;
-
-  // Screen Focus follows recorded mouse or explicit keyframe focal point (NEVER desktop cursor hover)
-  const currentFocal = useMemo(() => {
-    if (timelineZoom) {
-      if (recordedMouseFocal) {
-        return { x: recordedMouseFocal.x, y: recordedMouseFocal.y };
-      }
-      return { x: timelineZoom.focal_x, y: timelineZoom.focal_y };
-    }
-    return { x: 0.5, y: 0.5 };
-  }, [timelineZoom, recordedMouseFocal]);
-
-  // Dynamic Camera Transform with smooth spring easing & focal clamping
+  // Dynamic Camera Transform using unified spring physics (1:1 parity with exportEngine)
   const zoomStyle = useMemo<React.CSSProperties>(() => {
-    if (!isZoomActive) {
+    const curMs = effectiveTime * 1000;
+    const focal = recordedMouseFocal
+      ? { x: recordedMouseFocal.x, y: recordedMouseFocal.y }
+      : null;
+    const cam = computeCameraZoom(curMs, project.zooms, focal, project.zoomConfig);
+
+    if (cam.level <= 1.0005 && Math.abs(cam.transX) < 0.01 && Math.abs(cam.transY) < 0.01) {
       return {
         transform: 'scale(1) translate(0%, 0%)',
-        transition: 'transform 450ms cubic-bezier(0.16, 1, 0.3, 1)',
         transformOrigin: '50% 50%',
       };
     }
 
-    const { x, y } = currentFocal;
-    const maxOffset = 50 * (1 - 1 / currentZoomLevel);
-    const transX = Math.max(-maxOffset, Math.min(maxOffset, (0.5 - x) * 100));
-    const transY = Math.max(-maxOffset, Math.min(maxOffset, (0.5 - y) * 100));
-
     return {
-      transform: `scale(${currentZoomLevel}) translate(${transX.toFixed(2)}%, ${transY.toFixed(2)}%)`,
-      transition: 'transform 450ms cubic-bezier(0.16, 1, 0.3, 1)',
+      transform: `scale(${cam.level.toFixed(4)}) translate(${cam.transX.toFixed(3)}%, ${cam.transY.toFixed(3)}%)`,
       transformOrigin: '50% 50%',
     };
-  }, [isZoomActive, currentZoomLevel, currentFocal]);
+  }, [effectiveTime, project.zooms, recordedMouseFocal, project.zoomConfig]);
 
   const handleLoadedMetadata = () => {
     const v = videoRef.current;
@@ -422,15 +393,8 @@ export const StudioViewport: React.FC<StudioViewportProps> = React.memo(({
 
       {/* 3. Bottom Playback Control Bar in Video Box Bottom (Matching Image 3) */}
       <div className="h-11 px-4 flex items-center justify-between text-xs text-zinc-300 border-t border-zinc-800/80 bg-[#0c0c0e] shrink-0">
-        {/* Left: Layout icon, Cut Scissors, Zoom Slider */}
+        {/* Left: Cut Scissors, Zoom Slider */}
         <div className="flex items-center gap-2">
-          <button
-            className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800/70 transition-colors"
-            title="Toggle Sidebar"
-          >
-            <PanelLeft className="w-4 h-4" />
-          </button>
-
           <button
             onClick={onCutClip ? onCutClip : onAddZoom}
             className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800/70 transition-colors"

@@ -1,4 +1,4 @@
-import type { ProjectState, MouseEventRecord, VideoClip } from '../types/canvid';
+import type { ProjectState, VideoClip } from '../types/canvid';
 import {
   WINDOWS_ARROW_DATA_URL,
   WINDOWS_LINK_DATA_URL,
@@ -6,6 +6,7 @@ import {
   MACOS_LINK_DATA_URL,
 } from './cursorAssets';
 import { TauriBridge } from './tauriBridge';
+import { sampleCursorState, computeCameraZoom } from './springPhysics';
 
 export interface ExportProgress {
   progress: number; // 0 to 100
@@ -98,117 +99,6 @@ function drawImageContain(
     dx = x + (w - dWidth) / 2;
   }
   ctx.drawImage(img, 0, 0, imgW, imgH, dx, dy, dWidth, dHeight);
-}
-
-interface SmoothMousePoint {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  speed: number;
-  isClicking: boolean;
-}
-
-// Smooth Catmull-Rom spline interpolation matching CustomCursor.tsx 1:1
-function getInterpolatedMouse(
-  events: MouseEventRecord[],
-  curMs: number,
-  smoothing = true
-): SmoothMousePoint | null {
-  if (!events || events.length === 0) return null;
-  let low = 0;
-  let high = events.length - 1;
-  while (low <= high) {
-    const mid = Math.floor((low + high) / 2);
-    if (events[mid].t_ms < curMs) low = mid + 1;
-    else high = mid - 1;
-  }
-
-  const idx = Math.max(0, Math.min(events.length - 1, low));
-  const p0 = events[Math.max(0, idx - 2)];
-  const p1 = events[Math.max(0, idx - 1)];
-  const p2 = events[idx];
-  const p3 = events[Math.min(events.length - 1, idx + 1)];
-
-  let x = p2 ? p2.x : 0;
-  let y = p2 ? p2.y : 0;
-  let velX = 0;
-  let velY = 0;
-
-  if (p1 && p2 && p2.t_ms > p1.t_ms) {
-    const dt = Math.max(1, p2.t_ms - p1.t_ms);
-    velX = ((p2.x - p1.x) / dt) * 16.6;
-    velY = ((p2.y - p1.y) / dt) * 16.6;
-
-    if (smoothing) {
-      const t = Math.max(0, Math.min(1, (curMs - p1.t_ms) / (p2.t_ms - p1.t_ms)));
-      const t2 = t * t;
-      const t3 = t2 * t;
-
-      x = 0.5 * (
-        (2 * p1.x) +
-        (-p0.x + p2.x) * t +
-        (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
-        (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3
-      );
-
-      y = 0.5 * (
-        (2 * p1.y) +
-        (-p0.y + p2.y) * t +
-        (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
-        (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3
-      );
-    }
-  }
-
-  const curSpeed = Math.sqrt(velX * velX + velY * velY);
-
-  let isClick = false;
-  const startIdx = Math.max(0, idx - 8);
-  const endIdx = Math.min(events.length - 1, idx + 8);
-  for (let i = startIdx; i <= endIdx; i++) {
-    const ev = events[i];
-    if (ev && (ev.event_type === 'lclick' || ev.event_type === 'rclick') && Math.abs(ev.t_ms - curMs) < 220) {
-      isClick = true;
-      break;
-    }
-  }
-
-  return { x, y, vx: velX, vy: velY, speed: curSpeed, isClicking: isClick };
-}
-
-// Compute Camera Pan & Zoom matching StudioViewport.tsx 1:1
-function computeCameraZoom(
-  curMs: number,
-  zooms: any[],
-  cursorFocal: { x: number; y: number }
-) {
-  const activeZoom = (zooms || []).find((z) => !z.disabled && curMs >= z.start && curMs <= z.end);
-  if (!activeZoom) {
-    return { level: 1.0, transX: 0, transY: 0 };
-  }
-
-  const zDur = Math.max(100, activeZoom.end - activeZoom.start);
-  const transDur = Math.min(420, zDur / 2.5);
-  let ease = 1.0;
-  if (curMs < activeZoom.start + transDur) {
-    const t = (curMs - activeZoom.start) / transDur;
-    ease = 0.5 - 0.5 * Math.cos(t * Math.PI); // smooth sine ease
-  } else if (curMs > activeZoom.end - transDur) {
-    const t = (activeZoom.end - curMs) / transDur;
-    ease = 0.5 - 0.5 * Math.cos(t * Math.PI);
-  }
-
-  const currentLevel = 1.0 + (activeZoom.level - 1.0) * ease;
-  const focalX = activeZoom.focal_x !== undefined ? activeZoom.focal_x : cursorFocal.x;
-  const focalY = activeZoom.focal_y !== undefined ? activeZoom.focal_y : cursorFocal.y;
-
-  // Exact Canvid focal clamping: prevents video from separating from window boundary
-  const maxOffset = 50 * (1 - 1 / currentLevel);
-  const transX = Math.max(-maxOffset, Math.min(maxOffset, (0.5 - focalX) * 100));
-  const transY = Math.max(-maxOffset, Math.min(maxOffset, (0.5 - focalY) * 100));
-
-  return { level: currentLevel, transX, transY };
 }
 
 export async function exportFinalEditedVideo(
@@ -496,8 +386,13 @@ export async function exportFinalEditedVideo(
       await seekVideoFrame(video, videoTargetTime);
 
       const curMs = currentTimelineSec * 1000;
-      const mouse = getInterpolatedMouse(mouseEvents, curMs, project.cursor.smoothing !== false);
-      const cursorFocal = mouse ? { x: mouse.x / videoOrigW, y: mouse.y / videoOrigH } : { x: 0.5, y: 0.5 };
+      const hasMouse = mouseEvents.length > 0;
+      const sampled = hasMouse
+        ? sampleCursorState(mouseEvents, curMs, project.cursor, videoOrigW, videoOrigH)
+        : null;
+      const cursorFocal = sampled
+        ? { x: sampled.x / videoOrigW, y: sampled.y / videoOrigH }
+        : null;
 
       // Clear canvas
       ctx.fillStyle = '#000000';
@@ -560,7 +455,7 @@ export async function exportFinalEditedVideo(
       ctx.clip();
 
       // Compute Camera Zoom & Pan
-      const zoom = computeCameraZoom(curMs, project.zooms || [], cursorFocal);
+      const zoom = computeCameraZoom(curMs, project.zooms || [], cursorFocal, project.zoomConfig);
 
       ctx.save();
       // Match StudioViewport: transformOrigin: 50% 50%, transform: scale(level) translate(transX%, transY%)
@@ -574,83 +469,160 @@ export async function exportFinalEditedVideo(
       // C. 1. Draw Video Frame with object-fit: contain
       drawImageContain(ctx, video, videoOrigW, videoOrigH, 0, 0, innerW, innerH);
 
-      // C. 2. Draw Vector Cursor inside the Same Camera Space (Exact alignment)
-      if (project.cursor.visible && mouse) {
-        const mouseCanvasX = (mouse.x / videoOrigW) * innerW;
-        const mouseCanvasY = (mouse.y / videoOrigH) * innerH;
+      // C. 2. Draw Real Screen Ripples & Vector Cursor inside Same Camera Space
+      if (project.cursor.visible && sampled) {
+        const scaleFactor = project.cursor.scale ?? 1.0;
+        const unitW = 22 * scaleFactor * (targetW / 1920) / zoom.level;
 
+        // C. 2a. Real Multi-Wave Screen Ripple Effect (pinned at click coordinates)
+        if (project.cursor.clickEffect === 'ripple' && sampled.activeRipples.length > 0) {
+          const maxR = Math.max(18, 30 * scaleFactor) * (targetW / 1920) / zoom.level;
+          const strokeScale = (targetW / 1920) / zoom.level;
+
+          for (const rp of sampled.activeRipples) {
+            const rx = (rp.x / videoOrigW) * innerW;
+            const ry = (rp.y / videoOrigH) * innerH;
+            const r1 = 4 * strokeScale + rp.progress * maxR;
+            const a1 = Math.pow(Math.max(0, 1 - rp.rawProgress), 1.5);
+
+            // Soft annular refractive sheen
+            ctx.save();
+            const grad = ctx.createRadialGradient(rx, ry, Math.max(0, r1 * 0.56), rx, ry, r1);
+            grad.addColorStop(0, 'rgba(255, 255, 255, 0)');
+            grad.addColorStop(0.55, `rgba(255, 255, 255, ${(a1 * 0.16).toFixed(3)})`);
+            grad.addColorStop(0.85, `rgba(255, 255, 255, ${(a1 * 0.55).toFixed(3)})`);
+            grad.addColorStop(1, `rgba(0, 0, 0, ${(a1 * 0.18).toFixed(3)})`);
+            ctx.beginPath();
+            ctx.arc(rx, ry, r1, 0, Math.PI * 2);
+            ctx.fillStyle = grad;
+            ctx.fill();
+
+            // Primary bright wave crest + subtle contrast inner edge
+            ctx.beginPath();
+            ctx.arc(rx, ry, r1, 0, Math.PI * 2);
+            ctx.strokeStyle = `rgba(255, 255, 255, ${(a1 * 0.82).toFixed(3)})`;
+            ctx.lineWidth = 1.6 * strokeScale;
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.arc(rx, ry, Math.max(0.5, r1 - 1.5 * strokeScale), 0, Math.PI * 2);
+            ctx.strokeStyle = `rgba(0, 0, 0, ${(a1 * 0.2).toFixed(3)})`;
+            ctx.lineWidth = 1.0 * strokeScale;
+            ctx.stroke();
+
+            // Secondary trailing wave crest
+            if (rp.secondaryProgress > 0) {
+              const r2 = 3 * strokeScale + rp.secondaryProgress * (maxR * 0.72);
+              const a2 = Math.pow(Math.max(0, 1 - rp.secondaryProgress), 1.6) * 0.65;
+              ctx.beginPath();
+              ctx.arc(rx, ry, r2, 0, Math.PI * 2);
+              ctx.strokeStyle = `rgba(255, 255, 255, ${(a2 * 0.68).toFixed(3)})`;
+              ctx.lineWidth = 1.2 * strokeScale;
+              ctx.stroke();
+            }
+
+            // Initial impact specular flash
+            if (rp.rawProgress < 0.28) {
+              const flashR = Math.max(2, (4 + rp.rawProgress * 16 * scaleFactor) * strokeScale);
+              const flashAlpha = (1 - rp.rawProgress / 0.28) * 0.45;
+              const fGrad = ctx.createRadialGradient(rx, ry, 0, rx, ry, flashR);
+              fGrad.addColorStop(0, `rgba(255, 255, 255, ${flashAlpha.toFixed(3)})`);
+              fGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+              ctx.beginPath();
+              ctx.arc(rx, ry, flashR, 0, Math.PI * 2);
+              ctx.fillStyle = fGrad;
+              ctx.fill();
+            }
+            ctx.restore();
+          }
+        }
+
+        // C. 2b. Cursor Rendering with Click Zoom-In/Out, Tilt, & Directional Motion Blur
+        const mouseCanvasX = (sampled.x / videoOrigW) * innerW;
+        const mouseCanvasY = (sampled.y / videoOrigH) * innerH;
         const curTheme = project.cursor.theme || 'windows';
-        const isClicking = mouse.isClicking;
-        const cursorImg = curTheme === 'mac'
-          ? (isClicking ? macHand : macArrow)
-          : (isClicking ? winLink : winArrow);
+        const showHand = sampled.showHand;
 
-        // Counteract zoom so cursor maintains natural visual size on screen just like in CSS
-        const baseCursorScale = (project.cursor.scale ?? 1.4) * (targetW / 1920);
-        const cursorScale = baseCursorScale / zoom.level;
-        const cursorW = 28 * cursorScale;
-        const cursorH = 28 * cursorScale;
+        const isMotionBlur = project.cursor.motionBlur !== false && sampled.speed > 2.0 && !sampled.isClicking;
+        const blurAmount = isMotionBlur ? Math.min(8.0, Math.max(0, (sampled.speed - 2.0) * 0.18)) : 0;
 
-        let hotspotOffsetX = 0;
-        let hotspotOffsetY = 0;
-
-        if (isClicking) {
-          if (curTheme === 'windows') {
-            hotspotOffsetX = -0.3571 * cursorW;
-          } else {
-            hotspotOffsetX = -0.3396 * cursorW;
-            hotspotOffsetY = -0.1161 * cursorH;
-          }
-        } else {
-          if (curTheme === 'mac') {
-            hotspotOffsetX = -0.1711 * cursorW;
-            hotspotOffsetY = -0.0973 * cursorH;
-          }
-        }
-
-        // Click ripple
-        if (project.cursor.clickEffect === 'ripple' && isClicking) {
+        const drawCursorAtHotspot = (cx: number, cy: number, alpha: number) => {
           ctx.save();
-          ctx.beginPath();
-          ctx.arc(mouseCanvasX, mouseCanvasY, 24 * cursorScale, 0, Math.PI * 2);
-          ctx.strokeStyle = 'rgba(59, 130, 246, 0.75)';
-          ctx.lineWidth = 2.5 * (targetW / 1920) / zoom.level;
-          ctx.stroke();
-          ctx.restore();
-        }
+          ctx.globalAlpha = alpha;
+          ctx.translate(cx, cy);
+          ctx.scale(sampled.clickScale, sampled.clickScale);
+          if (sampled.tiltDeg !== 0) {
+            ctx.rotate((sampled.tiltDeg * Math.PI) / 180);
+          }
 
-        // Real Directional Camera Shutter Motion Blur
-        if (project.cursor.motionBlur !== false && mouse.speed > 2.0 && !isClicking) {
-          const blurAmount = Math.min(8.0, Math.max(0, (mouse.speed - 2.0) * 0.18));
-          if (blurAmount > 0.4) {
-            const steps = Math.min(5, Math.max(2, Math.round(blurAmount * 1.2)));
-            const normX = mouse.vx / mouse.speed;
-            const normY = mouse.vy / mouse.speed;
-            for (let s = 1; s <= steps; s++) {
-              const t = s / steps;
-              const smearDist = t * blurAmount * 2.8 * (targetW / 1920) / zoom.level;
-              const alpha = (1 - t) * 0.28;
-              ctx.save();
-              ctx.globalAlpha = alpha;
-              ctx.drawImage(
-                cursorImg,
-                mouseCanvasX + hotspotOffsetX - normX * smearDist,
-                mouseCanvasY + hotspotOffsetY - normY * smearDist,
-                cursorW,
-                cursorH
-              );
-              ctx.restore();
+          if (curTheme === 'touch') {
+            const radius = (unitW * 0.95) / 2;
+            ctx.beginPath();
+            ctx.arc(0, 0, radius, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.88)';
+            ctx.fill();
+            ctx.lineWidth = Math.max(1, unitW * 0.12);
+            ctx.strokeStyle = showHand ? '#3b82f6' : '#ffffff';
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.arc(0, 0, Math.max(1.5, radius * (showHand ? 0.44 : 0.36)), 0, Math.PI * 2);
+            ctx.fillStyle = showHand ? '#3b82f6' : '#18181b';
+            ctx.fill();
+            ctx.restore();
+            return;
+          }
+
+          const cursorImg = curTheme === 'mac'
+            ? (showHand ? macHand : macArrow)
+            : (showHand ? winLink : winArrow);
+
+          let cursorW = unitW;
+          let cursorH = unitW * (76 / 52);
+          let hotspotOffsetX = 0;
+          let hotspotOffsetY = 0;
+
+          if (showHand) {
+            if (curTheme === 'mac') {
+              cursorW = unitW * (106 / 52);
+              cursorH = unitW * (112 / 52);
+              hotspotOffsetX = -0.3396 * cursorW;
+              hotspotOffsetY = -0.1161 * cursorH;
+            } else {
+              cursorW = unitW * (70 / 52);
+              cursorH = unitW * (92 / 52);
+              hotspotOffsetX = -0.3571 * cursorW;
+            }
+          } else {
+            if (curTheme === 'mac') {
+              cursorW = unitW * (76 / 52);
+              cursorH = unitW * (113 / 52);
+              hotspotOffsetX = -0.1711 * cursorW;
+              hotspotOffsetY = -0.0973 * cursorH;
             }
           }
+
+          ctx.drawImage(cursorImg, hotspotOffsetX, hotspotOffsetY, cursorW, cursorH);
+          ctx.restore();
+        };
+
+        // Directional Camera Shutter Motion Blur
+        if (isMotionBlur && blurAmount > 0.4 && sampled.speed > 0) {
+          const steps = Math.min(5, Math.max(2, Math.round(blurAmount * 1.2)));
+          const normX = sampled.vx / sampled.speed;
+          const normY = sampled.vy / sampled.speed;
+          for (let s = 1; s <= steps; s++) {
+            const t = s / steps;
+            const smearDist = t * blurAmount * 2.8 * (targetW / 1920) / zoom.level;
+            drawCursorAtHotspot(
+              mouseCanvasX - normX * smearDist,
+              mouseCanvasY - normY * smearDist,
+              (1 - t) * 0.28
+            );
+          }
         }
 
-        ctx.drawImage(
-          cursorImg,
-          mouseCanvasX + hotspotOffsetX,
-          mouseCanvasY + hotspotOffsetY,
-          cursorW,
-          cursorH
-        );
+        drawCursorAtHotspot(mouseCanvasX, mouseCanvasY, 1.0);
       }
 
       ctx.restore(); // Restore camera zoom

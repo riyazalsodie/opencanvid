@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useId, useMemo } from 'react';
 import {
   Image as ImageIcon,
   MousePointer,
@@ -23,6 +23,11 @@ import { SleekCheckbox, SleekSwitch } from './SleekControls';
 import type { ProjectState, ZoomKeyframe } from '../types/canvid';
 import { CANVID_WALLPAPERS } from '../utils/wallpapers';
 import { WINDOWS_ARROW_DATA_URL, MACOS_ARROW_DATA_URL } from '../utils/cursorAssets';
+import {
+  computeSpringCurveSamples,
+  CURSOR_STYLE_PRESETS,
+  ZOOM_STYLE_PRESETS,
+} from '../utils/springPhysics';
 
 interface InspectorProps {
   project: ProjectState;
@@ -105,35 +110,54 @@ const SmoothSlider: React.FC<{
   );
 };
 
-// Smooth Spring Dynamic Curve SVG Visualizer matching Canvid Screenshot 2 & 3
+// Physically Accurate 2nd-Order Spring Step-Response Visualizer matching Canvid
 const SpringCurveGraph: React.FC<{ tension: number; friction: number }> = ({ tension, friction }) => {
-  const points: string[] = [];
-  const total = 50;
-  const omega = Math.sqrt(Math.max(10, tension)) * 0.045;
-  const zeta = Math.max(0.12, friction * 0.016);
+  const gradId = useId().replace(/:/g, '_');
 
-  for (let i = 0; i <= total; i++) {
-    const t = i / total;
-    const val = 1 - Math.exp(-zeta * omega * i * 3.5) * Math.cos(omega * i * 3.5);
-    const x = (t * 220).toFixed(1);
-    const y = (38 - Math.max(0, Math.min(1.08, val)) * 32).toFixed(1);
-    points.push(`${i === 0 ? 'M' : 'L'} ${x} ${y}`);
-  }
+  const { pathD, areaD } = useMemo(() => {
+    const samples = computeSpringCurveSamples(tension, friction, 1.6, 80);
+    const padX = 4;
+    const width = 212;
+    const baseY = 43; // value = 0.0
+    const unitScale = 27; // value = 1.0 sits at y = 16, overshoot up to 1.48 sits inside y >= 3
 
-  const pathD = points.join(' ');
-  const areaD = `${pathD} L 220 44 L 0 44 Z`;
+    const pts = samples.map((s, i) => {
+      const x = (padX + s.t * width).toFixed(1);
+      const clampedVal = Math.max(-0.1, Math.min(1.48, s.value));
+      const y = (baseY - clampedVal * unitScale).toFixed(1);
+      return `${i === 0 ? 'M' : 'L'} ${x} ${y}`;
+    });
+
+    const pD = pts.join(' ');
+    const aD = `${pD} L ${(padX + width).toFixed(1)} 48 L ${padX} 48 Z`;
+    return { pathD: pD, areaD: aD };
+  }, [tension, friction]);
 
   return (
     <div className="w-full h-14 bg-[#111113] border border-zinc-800/80 rounded-xl overflow-hidden relative flex items-center justify-center shadow-inner">
-      <svg className="w-full h-full" viewBox="0 0 220 44" preserveAspectRatio="none">
+      <svg className="w-full h-full" viewBox="0 0 220 48" preserveAspectRatio="none">
         <defs>
-          <linearGradient id="canvidSpringGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#ffffff" stopOpacity="0.18" />
+          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#ffffff" stopOpacity="0.20" />
             <stop offset="100%" stopColor="#ffffff" stopOpacity="0.0" />
           </linearGradient>
         </defs>
-        <path d={areaD} fill="url(#canvidSpringGrad)" />
-        <path d={pathD} fill="none" stroke="#d4d4d8" strokeWidth="1.75" strokeLinecap="round" />
+        {/* Subtle vertical time guide lines */}
+        <line x1="57" y1="4" x2="57" y2="44" stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
+        <line x1="110" y1="4" x2="110" y2="44" stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
+        <line x1="163" y1="4" x2="163" y2="44" stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
+        {/* Target equilibrium steady-state line (y = 1.0 -> svgY = 16) */}
+        <line
+          x1="4"
+          y1="16"
+          x2="216"
+          y2="16"
+          stroke="rgba(255,255,255,0.14)"
+          strokeWidth="1"
+          strokeDasharray="3 3"
+        />
+        <path d={areaD} fill={`url(#${gradId})`} />
+        <path d={pathD} fill="none" stroke="#e4e4e7" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     </div>
   );
@@ -744,7 +768,7 @@ export const Inspector: React.FC<InspectorProps> = React.memo(({
                   <button
                     onClick={() =>
                       updateProject({
-                        cursor: { ...project.cursor, scale: 1.4 },
+                        cursor: { ...project.cursor, scale: 1.0 },
                       })
                     }
                     className="text-zinc-500 hover:text-zinc-300 text-[11px] font-medium"
@@ -753,10 +777,10 @@ export const Inspector: React.FC<InspectorProps> = React.memo(({
                   </button>
                 </div>
                 <SmoothSlider
-                  min={0.8}
-                  max={3.0}
-                  step={0.1}
-                  value={project.cursor.scale || 1.4}
+                  min={0.35}
+                  max={2.5}
+                  step={0.05}
+                  value={project.cursor.scale ?? 1.0}
                   onChange={(val) =>
                     updateProject({
                       cursor: { ...project.cursor, scale: val },
@@ -912,19 +936,13 @@ export const Inspector: React.FC<InspectorProps> = React.memo(({
                     <button
                       key={style}
                       onClick={() => {
-                        const presets: Record<string, [number, number]> = {
-                          molasses: [180, 100],
-                          default: [470, 70],
-                          gentle: [320, 80],
-                          stiff: [600, 50],
-                        };
-                        const [t, f] = presets[style] || [470, 70];
+                        const preset = CURSOR_STYLE_PRESETS[style];
                         updateProject({
                           cursor: {
                             ...project.cursor,
                             animationStyle: style,
-                            tension: t,
-                            friction: f,
+                            tension: preset.tension,
+                            friction: preset.friction,
                           },
                         });
                       }}
@@ -1027,19 +1045,13 @@ export const Inspector: React.FC<InspectorProps> = React.memo(({
                       <button
                         key={style}
                         onClick={() => {
-                          const presets: Record<string, [number, number]> = {
-                            molasses: [140, 160],
-                            default: [280, 120],
-                            gentle: [220, 140],
-                            stiff: [420, 90],
-                          };
-                          const [t, f] = presets[style] || [280, 120];
+                          const preset = ZOOM_STYLE_PRESETS[style];
                           updateProject({
                             zoomConfig: {
                               motionBlur: project.zoomConfig?.motionBlur ?? true,
                               animationStyle: style,
-                              tension: t,
-                              friction: f,
+                              tension: preset.tension,
+                              friction: preset.friction,
                             },
                           });
                         }}
