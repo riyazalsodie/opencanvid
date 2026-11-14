@@ -449,7 +449,7 @@ export async function exportFinalEditedVideo(
         ? sampleCursorState(mouseEvents, curMs, project.cursor, videoOrigW, videoOrigH)
         : null;
       const cursorFocal = sampled
-        ? { x: sampled.x / videoOrigW, y: sampled.y / videoOrigH }
+        ? { x: sampled.x / videoOrigW, y: sampled.y / videoOrigH, speed: sampled.speed }
         : null;
 
       // Clear canvas

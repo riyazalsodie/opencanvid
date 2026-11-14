@@ -158,6 +158,7 @@ export const StudioViewport: React.FC<StudioViewportProps> = React.memo(({
     return {
       x: Math.max(0.05, Math.min(0.95, sampled.x / videoDims.width)),
       y: Math.max(0.05, Math.min(0.95, sampled.y / videoDims.height)),
+      speed: sampled.speed,
       isClick: sampled.isClicking,
     };
   }, [project.mouseEvents, effectiveTime, project.cursor, videoDims]);
@@ -166,7 +167,7 @@ export const StudioViewport: React.FC<StudioViewportProps> = React.memo(({
   const zoomStyle = useMemo<React.CSSProperties>(() => {
     const curMs = effectiveTime * 1000;
     const focal = recordedMouseFocal
-      ? { x: recordedMouseFocal.x, y: recordedMouseFocal.y }
+      ? { x: recordedMouseFocal.x, y: recordedMouseFocal.y, speed: recordedMouseFocal.speed }
       : null;
     const cam = computeCameraZoom(curMs, project.zooms, focal, project.zoomConfig);
 

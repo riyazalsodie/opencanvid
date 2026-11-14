@@ -384,7 +384,7 @@ export function sampleCursorState(
 export function computeCameraZoom(
   curMs: number,
   zooms: ZoomKeyframe[],
-  cursorFocal: { x: number; y: number } | null,
+  cursorFocal: { x: number; y: number; speed?: number } | null,
   zoomConfig?: ZoomConfig
 ): { level: number; transX: number; transY: number } {
   const activeZoom = (zooms || []).find((z) => !z.disabled && curMs >= z.start && curMs <= z.end);
@@ -410,13 +410,26 @@ export function computeCameraZoom(
     ease = evaluateSpringStep(fracOut * simSpanSec, tension, friction);
   }
 
-  const currentLevel = Math.max(1.0, 1.0 + (activeZoom.level - 1.0) * ease);
+  const baseLevel = Math.max(1.0, 1.0 + (activeZoom.level - 1.0) * ease);
   const focalX = cursorFocal ? cursorFocal.x : (activeZoom.focal_x ?? 0.5);
   const focalY = cursorFocal ? cursorFocal.y : (activeZoom.focal_y ?? 0.5);
 
+  // Cinematic idle float: when the cursor is at rest, let the camera breathe and
+  // drift a few pixels around it. Fades out while the mouse moves and during the
+  // zoom-in/out transitions so it never fights cursor tracking.
+  const cursorSpeed = cursorFocal?.speed ?? 0;
+  const rawIdle = 1 - Math.min(1, Math.max(0, (cursorSpeed - 0.3) / 1.7));
+  const idleWeight = rawIdle * rawIdle * (3 - 2 * rawIdle);
+  const idleEase = ease * idleWeight;
+  const idleSec = curMs / 1000;
+  const driftX = Math.sin(idleSec * 0.85) * 0.5 * idleEase;
+  const driftY = Math.cos(idleSec * 0.63 + 0.9) * 0.36 * idleEase;
+  const breathe = 1 + Math.sin(idleSec * 0.52 + 2.1) * 0.0025 * idleEase;
+
+  const currentLevel = Math.max(1.0, baseLevel * breathe);
   const maxOffset = 50 * (1 - 1 / currentLevel);
-  const transX = Math.max(-maxOffset, Math.min(maxOffset, (0.5 - focalX) * 100));
-  const transY = Math.max(-maxOffset, Math.min(maxOffset, (0.5 - focalY) * 100));
+  const transX = Math.max(-maxOffset, Math.min(maxOffset, (0.5 - focalX) * 100 + driftX));
+  const transY = Math.max(-maxOffset, Math.min(maxOffset, (0.5 - focalY) * 100 + driftY));
 
   return { level: currentLevel, transX, transY };
 }
