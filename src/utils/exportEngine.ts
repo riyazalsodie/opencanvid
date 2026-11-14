@@ -514,16 +514,8 @@ export async function exportFinalEditedVideo(
       drawRoundedRect(ctx, frameX, frameY, innerW, innerH, cornerRadius);
       ctx.clip();
 
-      // Compute Camera Zoom & Pan via continuous gimbal spring ODE
-      const zoom = computeCameraZoom(
-        curMs,
-        project.zooms || [],
-        cursorFocal,
-        project.zoomConfig,
-        mouseEvents,
-        videoOrigW,
-        videoOrigH
-      );
+      // Compute Camera Zoom & Pan
+      const zoom = computeCameraZoom(curMs, project.zooms || [], cursorFocal, project.zoomConfig);
 
       // C. 0. Camera Optical Zoom/Pan Shutter Motion Blur (blended smoothly over primary video layer)
       const originX = frameX + innerW / 2;

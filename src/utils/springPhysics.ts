@@ -378,121 +378,45 @@ export function sampleCursorState(
   };
 }
 
-export interface CameraZoomState {
-  level: number;
-  transX: number;
-  transY: number;
-  vLevel: number;
-  vTransX: number;
-  vTransY: number;
-  motionBlurPx: number;
-}
-
 /**
- * Continuous causal 2nd-order camera gimbal spring solver used 1:1 by StudioViewport and exportEngine.
+ * Shared spring camera zoom calculator used 1:1 by StudioViewport and exportEngine.
  */
 export function computeCameraZoom(
   curMs: number,
   zooms: ZoomKeyframe[],
   cursorFocal: { x: number; y: number } | null,
-  zoomConfig?: ZoomConfig,
-  mouseEvents?: MouseEventRecord[],
-  sourceWidth = 1920,
-  sourceHeight = 1080
-): CameraZoomState {
-  if (!zooms || zooms.length === 0) {
-    return { level: 1.0, transX: 0, transY: 0, vLevel: 0, vTransX: 0, vTransY: 0, motionBlurPx: 0 };
+  zoomConfig?: ZoomConfig
+): { level: number; transX: number; transY: number } {
+  const activeZoom = (zooms || []).find((z) => !z.disabled && curMs >= z.start && curMs <= z.end);
+  if (!activeZoom) {
+    return { level: 1.0, transX: 0, transY: 0 };
   }
 
   const preset = ZOOM_STYLE_PRESETS[zoomConfig?.animationStyle || 'default'];
-  const tension = Math.max(30, zoomConfig?.tension ?? preset.tension);
-  const friction = Math.max(8, zoomConfig?.friction ?? preset.friction);
+  const tension = zoomConfig?.tension ?? preset.tension;
+  const friction = zoomConfig?.friction ?? preset.friction;
 
-  const zoomMass = 3.2;
-  const kZoom = tension / zoomMass;
-  const cZoom = friction / zoomMass;
+  const zDur = Math.max(100, activeZoom.end - activeZoom.start);
+  const settleMs = estimateSpringSettleMs(tension, friction);
+  const transDur = Math.min(settleMs, zDur * 0.44);
+  const simSpanSec = settleMs / 1000;
 
-  // Heavy cinema fluid-head damping for focal pan so camera glides without jitter
-  const panMass = 5.0;
-  const kPan = (tension * 0.72) / panMass;
-  const cPan = (friction * 1.35) / panMass;
-
-  const lookbackMs = Math.min(Math.max(0, curMs), 2400);
-  const startMs = Math.max(0, curMs - lookbackMs);
-  const stepMs = 8;
-
-  let level = 1.0;
-  let vLevel = 0;
-  let transX = 0;
-  let vTransX = 0;
-  let transY = 0;
-  let vTransY = 0;
-  let hintIdx = 0;
-
-  let tMs = startMs;
-  while (tMs < curMs - 0.1) {
-    const nextMs = Math.min(curMs, tMs + stepMs);
-    const dtSec = (nextMs - tMs) / 1000;
-
-    const z = zooms.find((zk) => !zk.disabled && nextMs >= zk.start && nextMs <= zk.end);
-    const zoomOutLeadMs = z ? Math.min(360, Math.max(120, (z.end - z.start) * 0.28)) : 0;
-
-    let targetLevel = 1.0;
-    let targetTransX = 0;
-    let targetTransY = 0;
-
-    if (z && nextMs <= z.end - zoomOutLeadMs) {
-      targetLevel = Math.max(1.0, z.level);
-
-      let fx = z.focal_x ?? 0.5;
-      let fy = z.focal_y ?? 0.5;
-      const zMode = (z as { mode?: string }).mode;
-
-      if (zMode !== 'manual') {
-        if (mouseEvents && mouseEvents.length > 0) {
-          const raw = lookupMouseAtTime(mouseEvents, nextMs, hintIdx, true, sourceWidth, sourceHeight);
-          hintIdx = raw.idx;
-          fx = Math.max(0.05, Math.min(0.95, raw.x / Math.max(1, sourceWidth)));
-          fy = Math.max(0.05, Math.min(0.95, raw.y / Math.max(1, sourceHeight)));
-        } else if (cursorFocal) {
-          fx = Math.max(0.05, Math.min(0.95, cursorFocal.x));
-          fy = Math.max(0.05, Math.min(0.95, cursorFocal.y));
-        }
-      }
-
-      const maxTargetOffset = 50 * (1 - 1 / targetLevel);
-      targetTransX = Math.max(-maxTargetOffset, Math.min(maxTargetOffset, (0.5 - fx) * 100));
-      targetTransY = Math.max(-maxTargetOffset, Math.min(maxTargetOffset, (0.5 - fy) * 100));
-    }
-
-    const aLevel = kZoom * (targetLevel - level) - cZoom * vLevel;
-    vLevel += aLevel * dtSec;
-    level += vLevel * dtSec;
-
-    const aTransX = kPan * (targetTransX - transX) - cPan * vTransX;
-    const aTransY = kPan * (targetTransY - transY) - cPan * vTransY;
-    vTransX += aTransX * dtSec;
-    vTransY += aTransY * dtSec;
-    transX += vTransX * dtSec;
-    transY += vTransY * dtSec;
-
-    tMs = nextMs;
+  let ease = 1.0;
+  if (curMs < activeZoom.start + transDur) {
+    const frac = (curMs - activeZoom.start) / transDur;
+    ease = evaluateSpringStep(frac * simSpanSec, tension, friction);
+  } else if (curMs > activeZoom.end - transDur) {
+    const fracOut = (activeZoom.end - curMs) / transDur;
+    ease = evaluateSpringStep(fracOut * simSpanSec, tension, friction);
   }
 
-  const finalLevel = Math.max(1.0, level);
-  const maxOffset = 50 * (1 - 1 / finalLevel);
-  const finalTransX = Math.max(-maxOffset, Math.min(maxOffset, transX));
-  const finalTransY = Math.max(-maxOffset, Math.min(maxOffset, transY));
+  const currentLevel = Math.max(1.0, 1.0 + (activeZoom.level - 1.0) * ease);
+  const focalX = cursorFocal ? cursorFocal.x : (activeZoom.focal_x ?? 0.5);
+  const focalY = cursorFocal ? cursorFocal.y : (activeZoom.focal_y ?? 0.5);
 
-  const motionBlurPx = 0;
+  const maxOffset = 50 * (1 - 1 / currentLevel);
+  const transX = Math.max(-maxOffset, Math.min(maxOffset, (0.5 - focalX) * 100));
+  const transY = Math.max(-maxOffset, Math.min(maxOffset, (0.5 - focalY) * 100));
 
-  return {
-    level: finalLevel,
-    transX: finalTransX,
-    transY: finalTransY,
-    vLevel,
-    vTransX,
-    vTransY,
-    motionBlurPx,
-  };
+  return { level: currentLevel, transX, transY };
 }
