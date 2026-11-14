@@ -346,13 +346,13 @@ ipcMain.handle('finalize-export-session', async (_event, { tempDir, totalFrames,
 
     const ffmpegExe = getFfmpegPath();
     const framePattern = path.join(tempDir, 'frame_%06d.jpg');
-    const safeCrf = typeof crf === 'number' ? crf : 18;
+    const safeCrf = typeof crf === 'number' ? Math.max(10, crf - 2) : 14;
     const safeFps = fps || 60;
 
     let encoded = false;
     try {
       // 1. Hardware Accelerated GPU Encoding (NVIDIA NVENC)
-      const gpuCmd = `"${ffmpegExe}" -y -framerate ${safeFps} -i "${framePattern}" ${audioArgs} -c:v h264_nvenc -preset p4 -tune hq -rc constqp -qp ${safeCrf} -pix_fmt yuv420p -movflags +faststart "${filePath}"`;
+      const gpuCmd = `"${ffmpegExe}" -y -framerate ${safeFps} -i "${framePattern}" ${audioArgs} -c:v h264_nvenc -preset p6 -tune hq -rc constqp -qp ${safeCrf} -b:v 0 -pix_fmt yuv420p -movflags +faststart "${filePath}"`;
       log('Running GPU Hardware NVENC command:', gpuCmd);
       execSync(gpuCmd, { stdio: 'pipe', windowsHide: true });
       encoded = true;
@@ -363,7 +363,7 @@ ipcMain.handle('finalize-export-session', async (_event, { tempDir, totalFrames,
 
     if (!encoded) {
       // 2. High-speed CPU Multi-threaded fallback
-      const cpuCmd = `"${ffmpegExe}" -y -framerate ${safeFps} -i "${framePattern}" ${audioArgs} -c:v libx264 -preset veryfast -crf ${safeCrf} -pix_fmt yuv420p -movflags +faststart "${filePath}"`;
+      const cpuCmd = `"${ffmpegExe}" -y -framerate ${safeFps} -i "${framePattern}" ${audioArgs} -c:v libx264 -preset fast -crf ${safeCrf} -pix_fmt yuv420p -movflags +faststart "${filePath}"`;
       log('Running CPU command:', cpuCmd);
       execSync(cpuCmd, { stdio: 'pipe', windowsHide: true });
     }

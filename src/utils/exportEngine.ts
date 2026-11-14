@@ -121,6 +121,7 @@ export async function exportFinalEditedVideo(
   let video: HTMLVideoElement | null = null;
   let camVideo: HTMLVideoElement | null = null;
   let objectUrlToRevoke: string | null = null;
+  let bgObjectUrlToRevoke: string | null = null;
   let hiddenContainer: HTMLDivElement | null = null;
 
   try {
@@ -184,6 +185,8 @@ export async function exportFinalEditedVideo(
     canvas.height = targetH;
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) throw new Error('Could not create canvas 2D rendering context.');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
 
     // 5. Preload Genuine Cursors
     const winArrow = new Image(); winArrow.src = WINDOWS_ARROW_DATA_URL;
@@ -191,20 +194,55 @@ export async function exportFinalEditedVideo(
     const macArrow = new Image(); macArrow.src = MACOS_ARROW_DATA_URL;
     const macHand = new Image(); macHand.src = MACOS_LINK_DATA_URL;
 
-    // Preload Wallpaper if image
+    // Preload Wallpaper as non-tainting same-origin blob URL so canvas.toDataURL() never throws SecurityError
     let bgImg: HTMLImageElement | null = null;
     if (project.background.type === 'image' && project.background.value) {
-      bgImg = new Image();
-      bgImg.crossOrigin = 'anonymous';
       let val = project.background.value;
-      if (val.startsWith('./')) {
+      if (val.startsWith('./') || val.startsWith('/')) {
         try {
           val = new URL(val, window.location.href).href;
-        } catch {
-          val = '/' + val.slice(2);
+        } catch {}
+      }
+
+      const guessImageMime = (p: string): string => {
+        const lower = p.toLowerCase();
+        if (lower.endsWith('.avif')) return 'image/avif';
+        if (lower.endsWith('.webp')) return 'image/webp';
+        if (lower.endsWith('.png')) return 'image/png';
+        if (lower.endsWith('.svg')) return 'image/svg+xml';
+        return 'image/jpeg';
+      };
+
+      let resolvedBgSrc = val;
+      if (!val.startsWith('blob:') && !val.startsWith('data:')) {
+        if (val.startsWith('file://')) {
+          try {
+            const localFilePath = decodeURIComponent(new URL(val).pathname.replace(/^\/([a-zA-Z]:)/, '$1'));
+            const fileBytes = await TauriBridge.readVideoFile(localFilePath);
+            if (fileBytes && fileBytes.length > 0) {
+              const blob = new Blob([fileBytes.buffer as ArrayBuffer], { type: guessImageMime(localFilePath) });
+              bgObjectUrlToRevoke = URL.createObjectURL(blob);
+              resolvedBgSrc = bgObjectUrlToRevoke;
+            }
+          } catch {}
+        }
+        if (resolvedBgSrc === val) {
+          try {
+            const resp = await fetch(val);
+            if (resp.ok) {
+              const b = await resp.blob();
+              bgObjectUrlToRevoke = URL.createObjectURL(b);
+              resolvedBgSrc = bgObjectUrlToRevoke;
+            }
+          } catch {}
         }
       }
-      bgImg.src = val;
+
+      bgImg = new Image();
+      if (!resolvedBgSrc.startsWith('blob:') && !resolvedBgSrc.startsWith('data:') && !resolvedBgSrc.startsWith('file://')) {
+        bgImg.crossOrigin = 'anonymous';
+      }
+      bgImg.src = resolvedBgSrc;
     }
 
     await Promise.all([
@@ -220,8 +258,29 @@ export async function exportFinalEditedVideo(
       }) : Promise.resolve(),
     ]);
 
+    // Verify wallpaper image will not taint export canvas
+    if (bgImg && bgImg.complete && bgImg.naturalWidth > 0) {
+      try {
+        const testCanvas = document.createElement('canvas');
+        testCanvas.width = 2;
+        testCanvas.height = 2;
+        const testCtx = testCanvas.getContext('2d');
+        if (testCtx) {
+          testCtx.drawImage(bgImg, 0, 0, 2, 2);
+          testCanvas.toDataURL('image/png');
+        }
+      } catch {
+        bgImg = null;
+      }
+    }
+
     // 6. Set up Dedicated Video Element for Deterministic Frame Seeking
     let videoSourceUrl = project.videoUrl || '';
+    if (!sourceVideoPath && videoSourceUrl.startsWith('file://')) {
+      try {
+        sourceVideoPath = decodeURIComponent(new URL(videoSourceUrl).pathname.replace(/^\/([a-zA-Z]:)/, '$1'));
+      } catch {}
+    }
 
     if (sourceVideoPath) {
       try {
@@ -237,7 +296,9 @@ export async function exportFinalEditedVideo(
     }
 
     video = document.createElement('video');
-    video.crossOrigin = 'anonymous';
+    if (!videoSourceUrl.startsWith('blob:') && !videoSourceUrl.startsWith('data:')) {
+      video.crossOrigin = 'anonymous';
+    }
     video.playsInline = true;
     video.muted = true;
     video.preload = 'auto';
@@ -330,10 +391,11 @@ export async function exportFinalEditedVideo(
     // 9. Frame-by-Frame Deterministic Rendering Loop
     let frameBatch: { index: number; dataUrl: string }[] = [];
 
-    // Seeking synchronizer using Chromium's requestVideoFrameCallback
+    // Seeking synchronizer: resolved immediately on hardware 'seeked' event
     const seekVideoFrame = (vid: HTMLVideoElement, targetTime: number): Promise<void> => {
       return new Promise<void>((resolve) => {
-        if (Math.abs(vid.currentTime - targetTime) < 0.006) {
+        const clampedTarget = Math.max(0, targetTime);
+        if (Math.abs(vid.currentTime - clampedTarget) < 0.001 && vid.readyState >= 2) {
           return resolve();
         }
         let resolved = false;
@@ -345,15 +407,11 @@ export async function exportFinalEditedVideo(
           }
         };
         const onSeeked = () => {
-          if ('requestVideoFrameCallback' in vid) {
-            (vid as any).requestVideoFrameCallback(() => finish());
-          } else {
-            requestAnimationFrame(() => finish());
-          }
+          setTimeout(finish, 0);
         };
         vid.addEventListener('seeked', onSeeked, { once: true });
-        vid.currentTime = targetTime;
-        setTimeout(finish, 200);
+        vid.currentTime = clampedTarget;
+        setTimeout(finish, 120);
       });
     };
 
@@ -435,6 +493,8 @@ export async function exportFinalEditedVideo(
         ctx.drawImage(video, 0, 0, videoOrigW, videoOrigH, -40, -40, targetW + 80, targetH + 80);
       }
       ctx.restore();
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
 
       // B. Outer Soft Drop Shadow (Matching StudioViewport.tsx)
       if (project.shadowEnabled) {
@@ -454,13 +514,23 @@ export async function exportFinalEditedVideo(
       drawRoundedRect(ctx, frameX, frameY, innerW, innerH, cornerRadius);
       ctx.clip();
 
-      // Compute Camera Zoom & Pan
-      const zoom = computeCameraZoom(curMs, project.zooms || [], cursorFocal, project.zoomConfig);
+      // Compute Camera Zoom & Pan via continuous gimbal spring ODE
+      const zoom = computeCameraZoom(
+        curMs,
+        project.zooms || [],
+        cursorFocal,
+        project.zoomConfig,
+        mouseEvents,
+        videoOrigW,
+        videoOrigH
+      );
+
+      // C. 0. Camera Optical Zoom/Pan Shutter Motion Blur (blended smoothly over primary video layer)
+      const originX = frameX + innerW / 2;
+      const originY = frameY + innerH / 2;
 
       ctx.save();
       // Match StudioViewport: transformOrigin: 50% 50%, transform: scale(level) translate(transX%, transY%)
-      const originX = frameX + innerW / 2;
-      const originY = frameY + innerH / 2;
       ctx.translate(originX, originY);
       ctx.scale(zoom.level, zoom.level);
       ctx.translate((zoom.transX / 100) * innerW, (zoom.transY / 100) * innerH);
@@ -468,6 +538,33 @@ export async function exportFinalEditedVideo(
 
       // C. 1. Draw Video Frame with object-fit: contain
       drawImageContain(ctx, video, videoOrigW, videoOrigH, 0, 0, innerW, innerH);
+
+      // Blend optical camera motion blur sub-frames inside clipped container before crisp overlays
+      if (project.zoomConfig?.motionBlur !== false && zoom.motionBlurPx > 0.35) {
+        const subSamples = [
+          { dt: -0.006, alpha: 0.24 },
+          { dt: -0.012, alpha: 0.14 },
+        ];
+        for (const sub of subSamples) {
+          const sLevel = Math.max(1.0, zoom.level + zoom.vLevel * sub.dt);
+          const sMax = 50 * (1 - 1 / sLevel);
+          const sTransX = Math.max(-sMax, Math.min(sMax, zoom.transX + zoom.vTransX * sub.dt));
+          const sTransY = Math.max(-sMax, Math.min(sMax, zoom.transY + zoom.vTransY * sub.dt));
+
+          ctx.save();
+          // Undo current camera matrix so sub-sample applies independently inside clip
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.globalAlpha = sub.alpha;
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.translate(originX, originY);
+          ctx.scale(sLevel, sLevel);
+          ctx.translate((sTransX / 100) * innerW, (sTransY / 100) * innerH);
+          ctx.translate(-innerW / 2, -innerH / 2);
+          drawImageContain(ctx, video, videoOrigW, videoOrigH, 0, 0, innerW, innerH);
+          ctx.restore();
+        }
+      }
 
       // C. 2. Draw Real Screen Ripples & Vector Cursor inside Same Camera Space
       if (project.cursor.visible && sampled) {
@@ -543,8 +640,7 @@ export async function exportFinalEditedVideo(
         const curTheme = project.cursor.theme || 'windows';
         const showHand = sampled.showHand;
 
-        const isMotionBlur = project.cursor.motionBlur !== false && sampled.speed > 2.0 && !sampled.isClicking;
-        const blurAmount = isMotionBlur ? Math.min(8.0, Math.max(0, (sampled.speed - 2.0) * 0.18)) : 0;
+        const isMotionBlur = project.cursor.motionBlur !== false && sampled.speed > 1.0 && !sampled.isClicking;
 
         const drawCursorAtHotspot = (cx: number, cy: number, alpha: number) => {
           ctx.save();
@@ -606,18 +702,21 @@ export async function exportFinalEditedVideo(
           ctx.restore();
         };
 
-        // Directional Camera Shutter Motion Blur
-        if (isMotionBlur && blurAmount > 0.4 && sampled.speed > 0) {
-          const steps = Math.min(5, Math.max(2, Math.round(blurAmount * 1.2)));
+        // Directional Optical Shutter Motion Blur (12-sample bell kernel along velocity vector)
+        if (isMotionBlur && sampled.speed > 1.0) {
+          const steps = 12;
           const normX = sampled.vx / sampled.speed;
           const normY = sampled.vy / sampled.speed;
-          for (let s = 1; s <= steps; s++) {
+          const totalSmear = Math.min(68, Math.max(4, sampled.speed * 1.55)) * (targetW / 1920) / zoom.level;
+          for (let s = steps; s >= 1; s--) {
             const t = s / steps;
-            const smearDist = t * blurAmount * 2.8 * (targetW / 1920) / zoom.level;
+            const dist = t * totalSmear;
+            const bellWeight = Math.sin((1 - t * 0.85) * (Math.PI / 2));
+            const sampleAlpha = (bellWeight / steps) * 1.65;
             drawCursorAtHotspot(
-              mouseCanvasX - normX * smearDist,
-              mouseCanvasY - normY * smearDist,
-              (1 - t) * 0.28
+              mouseCanvasX - normX * dist,
+              mouseCanvasY - normY * dist,
+              sampleAlpha
             );
           }
         }
@@ -677,8 +776,8 @@ export async function exportFinalEditedVideo(
         ctx.restore();
       }
 
-      // Serialize frame
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.90);
+      // Serialize frame at near-lossless quality to avoid double-compression blur
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.98);
       frameBatch.push({ index: frameIdx, dataUrl });
 
       // Write batch to disk every 15 frames or on final frame
@@ -704,10 +803,10 @@ export async function exportFinalEditedVideo(
     });
 
     const defaultFilename = `${project.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_Edited.mp4`;
-    let crfVal = 18;
+    let crfVal = 14;
     if (savedSettings.quality === 'Ultra') crfVal = 14;
-    else if (savedSettings.quality === 'Standard') crfVal = 23;
-    else if (savedSettings.quality === 'Low') crfVal = 28;
+    else if (savedSettings.quality === 'Standard') crfVal = 20;
+    else if (savedSettings.quality === 'Low') crfVal = 26;
 
     const res = await TauriBridge.finalizeExportSession({
       tempDir,
@@ -747,6 +846,11 @@ export async function exportFinalEditedVideo(
     if (objectUrlToRevoke) {
       try {
         URL.revokeObjectURL(objectUrlToRevoke);
+      } catch {}
+    }
+    if (bgObjectUrlToRevoke) {
+      try {
+        URL.revokeObjectURL(bgObjectUrlToRevoke);
       } catch {}
     }
     if (video && video !== existingVideoElement) {

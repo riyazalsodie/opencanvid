@@ -168,20 +168,35 @@ export const StudioViewport: React.FC<StudioViewportProps> = React.memo(({
     const focal = recordedMouseFocal
       ? { x: recordedMouseFocal.x, y: recordedMouseFocal.y }
       : null;
-    const cam = computeCameraZoom(curMs, project.zooms, focal, project.zoomConfig);
+    const cam = computeCameraZoom(
+      curMs,
+      project.zooms,
+      focal,
+      project.zoomConfig,
+      project.mouseEvents,
+      videoDims.width,
+      videoDims.height
+    );
+
+    const blurFilter =
+      project.zoomConfig?.motionBlur !== false && cam.motionBlurPx > 0.35
+        ? `blur(${Math.min(4.5, cam.motionBlurPx * 0.42).toFixed(2)}px)`
+        : undefined;
 
     if (cam.level <= 1.0005 && Math.abs(cam.transX) < 0.01 && Math.abs(cam.transY) < 0.01) {
       return {
         transform: 'scale(1) translate(0%, 0%)',
         transformOrigin: '50% 50%',
+        filter: blurFilter,
       };
     }
 
     return {
       transform: `scale(${cam.level.toFixed(4)}) translate(${cam.transX.toFixed(3)}%, ${cam.transY.toFixed(3)}%)`,
       transformOrigin: '50% 50%',
+      filter: blurFilter,
     };
-  }, [effectiveTime, project.zooms, recordedMouseFocal, project.zoomConfig]);
+  }, [effectiveTime, project.zooms, recordedMouseFocal, project.zoomConfig, project.mouseEvents, videoDims.width, videoDims.height]);
 
   const handleLoadedMetadata = () => {
     const v = videoRef.current;

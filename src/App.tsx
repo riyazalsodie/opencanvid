@@ -618,6 +618,10 @@ export const App: React.FC = () => {
         }
       }
 
+      // Transform window into Canvid-style always-on-top floating recording toolbar BEFORE starting capture
+      await TauriBridge.setRecordingFloatingMode(true);
+      await new Promise((r) => setTimeout(r, 60));
+
       // 4. Start native mouse tracking & Canvid-style WGC recorder (WithoutCursor)
       await TauriBridge.startMouseRecording();
       try {
@@ -638,9 +642,6 @@ export const App: React.FC = () => {
 
       setIsRecording(true);
       setIsPaused(false);
-
-      // Transform window into Canvid-style always-on-top floating recording toolbar pill
-      await TauriBridge.setRecordingFloatingMode(true);
     } catch (err) {
       console.error('Failed to start recording stream:', err);
       setIsLauncherOpen(true);
